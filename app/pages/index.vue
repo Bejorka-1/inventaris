@@ -1,299 +1,774 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { toast } from 'vue3-toastify'
-import { StoreDatas } from '~/store/state_management'
+import Navbar from '~/components/Navbar.vue'
 
-const datas = ref({
-    username: '',
-    password: ""
+// --- GANTI URL INI DENGAN URL DEPLOY ANDA YANG PALING BARU! ---
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzjvzPhMA9WND064RIbRemeQ4zutDvCGs6oJtWrWjMqm4zyWhKr_yrRlEASBEjZLQ/exec"
+
+const dataInventaris = ref<any[]>([])
+const dataMasterBarang = ref<any[]>([]) // Menampung Data Master dari Backend
+const isLoading = ref(true)
+const isSubmitting = ref(false)
+
+const showModal = ref(false)
+const selectedLembaga = ref('SMA') 
+const fetchSource = ref<'bun' | 'gas'>('gas')
+const selectedFilter = ref('all') 
+const selectedNamaBarang = ref('all') 
+
+// --- STATE UNTUK INLINE EDIT ---
+const editingItem = ref<any>(null)
+const editForm = ref<any>({})
+const isSavingEdit = ref(false)
+
+const getTodayDate = () => {
+    const today = new Date()
+    const year = today.getFullYear()
+    const month = String(today.getMonth() + 1).padStart(2, '0')
+    const day = String(today.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+}
+
+const formData = ref({
+    tanggal_pembukuan: getTodayDate(), 
+    nama_barang: '', ket_merk_ukuran: '', kuantitas: '1', nama_satuan: 'buah',
+    tahun_pembuatan: '', asal_barang: 'YBW II', tgl_penyerahan: '', 
+    kondisi_barang: 'baru', harga: '', ruang: '', status: '', tempat: '', pembelian: ''
 })
-const selectedTipeLembaga = ref()
-const allTipeLembaga = ref<any[]>([])
 
-const loadTipeLembaga = async () => {
+const currentPage = ref(1)
+const itemsPerPage = ref(15) 
+
+const fetchBukuIndukData = async () => {
+    isLoading.value = true
+    dataInventaris.value = [] 
+    
     try {
-        const res = await fetch("http://localhost:4000/api/tipe_lembaga/ambil", {
-            method: "GET",
-            headers: {
-                "Content-Type": "application/json"
-            }
-        })
-
+        const GAS_URL = `${GOOGLE_SCRIPT_URL}?action=inventaris&lembaga=${selectedLembaga.value}`
+        const res = await fetch(GAS_URL, { method: "GET" })
         const result = await res.json()
 
-        if(result.status > 200){
-            toast(result.message, {
-                type: "error",
-                theme: "auto",
-                position: "top-center"
-            })
+        const MASTER_URL = `${GOOGLE_SCRIPT_URL}?action=kode_barang`
+        const resMaster = await fetch(MASTER_URL, { method: "GET" })
+        const resultMaster = await resMaster.json()
+
+        if (result.status && result.status !== 200) {
+            toast(result.message || "Gagal memuat data", { type: "error" })
             return
         }
 
-        allTipeLembaga.value = result.datas
+        dataInventaris.value = (result.datas || []).map((v:any, i:number) => ({...v, _tempId: i}))
+        
+        if (resultMaster.status === 200 && resultMaster.datas) {
+             dataMasterBarang.value = resultMaster.datas.filter((item: any) => {
+                 const nama = item["Nama Barang"] || item["nama_barang"] || item["namaBarang"];
+                 return nama && String(nama).trim() !== ""
+             })
+        }
     } catch (error) {
-        console.log(error)
+        console.error("Error fetching data:", error)
+        toast("Terjadi kesalahan koneksi", { type: "error" })
+    } finally {
+        isLoading.value = false
     }
 }
 
-const onLogin = (e: Event) => {
-    e.preventDefault()
-    switch (selectedTipeLembaga.value.tipe_lembaga) {
-        case "SMK":
-            if(datas.value.username !== "AdminSMK" || datas.value.password !== "AdminSMK1"){
-                toast("Gagal Login", {
-                    type: "error",
-                    theme: "auto",
-                    position: "top-center"
-                })
-                return
+const submitForm = async () => {
+    if (!formData.value.nama_barang) return toast("Nama Barang wajib diisi!", { type: "warning" })
+
+    isSubmitting.value = true
+    try {
+        let tglP = formData.value.tanggal_pembukuan
+        if (tglP && tglP.includes('-')) tglP = `${tglP.split('-')[2]}/${tglP.split('-')[1]}/${tglP.split('-')[0]}`
+
+        let tglS = formData.value.tgl_penyerahan
+        if (tglS && tglS.includes('-')) tglS = `${tglS.split('-')[2]}/${tglS.split('-')[1]}/${tglS.split('-')[0]}`
+
+        const payload = {
+            action: "tambah_inventaris", lembaga: selectedLembaga.value,
+            tanggal_pembukuan: tglP, nama_barang: formData.value.nama_barang,
+            ket_merk_ukuran: formData.value.ket_merk_ukuran, kuantitas: formData.value.kuantitas,
+            nama_satuan: formData.value.nama_satuan, tahun_pembuatan: formData.value.tahun_pembuatan,
+            asal_barang: formData.value.asal_barang, tgl_penyerahan: tglS,
+            kondisi_barang: formData.value.kondisi_barang, harga: formData.value.harga,
+            ruang: formData.value.ruang, status: formData.value.status, tempat: formData.value.tempat, pembelian: formData.value.pembelian
+        }
+
+        const res = await fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload)
+        })
+        const result = await res.json()
+
+        if (result.status === 200) {
+            toast(`Sukses! Diinput sebagai nomor urut: ${result.data_baru.no_urut_barang}`, { type: "success" })
+            formData.value = {
+                tanggal_pembukuan: getTodayDate(), nama_barang: '', ket_merk_ukuran: '', kuantitas: '1', nama_satuan: 'buah',
+                tahun_pembuatan: '', asal_barang: 'YBW II', tgl_penyerahan: '', kondisi_barang: 'baru', harga: '', 
+                ruang: '', status: 'Aktif', tempat: '', pembelian: ''
             }
-
-            toast("Berhasil Login", {
-                type: "success",
-                theme: "auto",
-                position: "top-center"
-            })
-
-            const payload = {
-                username: datas.value.username,
-                id_sekolah: selectedTipeLembaga.value.id_sekolah,
-                tipe_lembaga: selectedTipeLembaga.value.tipe_lembaga
-            }
-
-            useCookie("username").value = payload.username
-            useCookie("tipe_lembaga").value = payload.tipe_lembaga
-            useCookie("id_sekolah").value = payload.id_sekolah
-            
-            useRouter().push("/dashboard")
-            break;
-        case "SMA":
-            if(datas.value.username !== "AdminSMA" || datas.value.password !== "AdminSMA2"){
-                toast("Gagal Login", {
-                    type: "error",
-                    theme: "auto",
-                    position: "top-center"
-                })
-                return
-            }
-
-            toast("Berhasil Login", {
-                type: "success",
-                theme: "auto",
-                position: "top-center"
-            })
-
-            const payload1 = {
-                username: datas.value.username,
-                id_sekolah: selectedTipeLembaga.value.id_sekolah,
-                tipe_lembaga: selectedTipeLembaga.value.tipe_lembaga
-            }
-
-            useCookie("username").value = payload1.username
-            useCookie("tipe_lembaga").value = payload1.tipe_lembaga
-            useCookie("id_sekolah").value = payload1.id_sekolah
-            
-            useRouter().push("/dashboard")
-            break;
-        case "YAYASAN":
-            if(datas.value.username !== "AdminYAYASAN" || datas.value.password !== "AdminYAYASAN3"){
-                toast("Gagal Login", {
-                    type: "error",
-                    theme: "auto",
-                    position: "top-center"
-                })
-                return
-            }
-
-            toast("Berhasil Login", {
-                type: "success",
-                theme: "auto",
-                position: "top-center"
-            })
-
-            const payload2 = {
-                username: datas.value.username,
-                id_sekolah: selectedTipeLembaga.value.id_sekolah,
-                tipe_lembaga: selectedTipeLembaga.value.tipe_lembaga
-            }
-
-            useCookie("username").value = payload2.username
-            useCookie("tipe_lembaga").value = payload2.tipe_lembaga
-            useCookie("id_sekolah").value = payload2.id_sekolah
-            
-            useRouter().push("/dashboard")
-            break;
+            showModal.value = false 
+            fetchBukuIndukData() 
+        } else {
+            toast(result.message || "Gagal menyimpan data", { type: "error" })
+        }
+    } catch (error) {
+        toast("Terjadi kesalahan koneksi saat mengirim data", { type: "error" })
+    } finally {
+        isSubmitting.value = false
     }
 }
 
-onMounted(() => {
-    loadTipeLembaga()
+const startEdit = (item: any) => {
+    editingItem.value = item._tempId
+    editForm.value = { 
+        nama_barang_lama: item.nama_barang, 
+        no_urut_barang: item.no_urut_barang,
+        ...item 
+    }
+}
+
+const cancelEdit = () => {
+    editingItem.value = null
+    editForm.value = {}
+}
+
+const saveEdit = async () => {
+    isSavingEdit.value = true
+    try {
+        const payload = {
+            action: "edit_inventaris",
+            lembaga: selectedLembaga.value,
+            no_urut_barang: editForm.value.no_urut_barang,
+            nama_barang_lama: editForm.value.nama_barang_lama, 
+            tanggal_pembukuan: editForm.value.tgl_pembukuan,
+            nama_barang: editForm.value.nama_barang,
+            ket_merk_ukuran: editForm.value.ket_merk,
+            kuantitas: editForm.value.kuantitas,
+            nama_satuan: editForm.value.satuan,
+            tahun_pembuatan: editForm.value.tahun,
+            asal_barang: editForm.value.asal,
+            tgl_penyerahan: editForm.value.tgl_penyerahan,
+            kondisi_barang: editForm.value.kondisi,
+            harga: editForm.value.harga,
+            ruang: editForm.value.ruang,
+            status: editForm.value.status,
+            tempat: editForm.value.tempat,
+            pembelian: editForm.value.pembelian
+        }
+
+        const res = await fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload)
+        })
+        const result = await res.json()
+
+        if (result.status === 200) {
+            toast("Data berhasil diperbarui!", { type: "success" })
+            cancelEdit()
+            fetchBukuIndukData()
+        } else {
+            toast(result.message || "Gagal mengupdate data", { type: "error" })
+        }
+    } catch (error) {
+        toast("Terjadi kesalahan koneksi", { type: "error" })
+    } finally {
+        isSavingEdit.value = false
+    }
+}
+
+const deleteItem = async (item: any) => {
+    if (!confirm(`Apakah Anda yakin ingin menghapus data "${item.nama_barang}" secara permanen?`)) return
+
+    try {
+        const payload = {
+            action: "delete_inventaris",
+            lembaga: selectedLembaga.value,
+            no_urut_barang: item.no_urut_barang,
+            nama_barang: item.nama_barang
+        }
+
+        const res = await fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload)
+        })
+        const result = await res.json()
+
+        if (result.status === 200) {
+            toast("Data berhasil dihapus!", { type: "success" })
+            fetchBukuIndukData()
+        } else {
+            toast(result.message || "Gagal menghapus data", { type: "error" })
+        }
+    } catch (error) {
+        toast("Terjadi kesalahan koneksi", { type: "error" })
+    }
+}
+
+watch([fetchSource, selectedLembaga], () => {
+    selectedNamaBarang.value = 'all'
+    currentPage.value = 1
+    fetchBukuIndukData()
 })
 
-onUnmounted(() => {
-    const ws = StoreDatas().GetDatasWebsocket()
+const validInventaris = computed(() => {
+    return dataInventaris.value.filter(item => {
+        const namaBarang = String(item.namaBarang || item.nama_barang || '').trim()
+        const upperNama = namaBarang.toUpperCase()
+        
+        if (upperNama.includes('BUKU INDUK') || upperNama.includes('JAKARTA') || upperNama === 'NAMA BARANG / BENDA') return false
+        if (upperNama.includes('TANAH DAN BANGUNAN') || upperNama === 'TANAH' || upperNama === 'BANGUNAN') return false
+        if (namaBarang === "" || namaBarang === "-") return false
+        
+        const noUrutBrg = String(item.noUrutBarang || item.no_urut_barang || item.no_urut || item.noUrut || item.jb_k || '').trim()
+        if (noUrutBrg === '' || noUrutBrg === '-' || noUrutBrg === '0000' || noUrutBrg === '000' || noUrutBrg === '00' || noUrutBrg === '0') return false
+        
+        return true
+    }).map(item => {
+        // ANTI-KEBOCORAN: Ambil secara murni dan eksak dari baris Excel
+        const rawGol = String(item.gol || item.golongan || '').trim().charAt(0).toUpperCase();
+        const rawKel = String(item.kel || item.kelompok || '').trim().padStart(2, '0');
+        const rawSub = String(item.jb_k || item.kode_kelompok || item.sub_kel || '').trim().padStart(2, '0');
+
+        return {
+            ...item,
+            tgl_pembukuan: item.tanggal_pembukuan || item['Tanggal Pembukuan'] || '-',
+            golongan: rawGol || '-',
+            kelompok: rawKel !== '00' ? rawKel : '-',
+            kode_kelompok: rawSub !== '00' ? rawSub : '-',
+            sort_key: `${rawGol} ${rawKel} ${rawSub}`, // Kunci urutan
+            no_urut_barang: item.noUrutBarang || item.no_urut_barang || item.jb_k || '-',
+            nama_barang: item.namaBarang || item.nama_barang || '-',
+            ket_merk: item.ket_merk_ukuran || item['Ket Merk, Nomor , Ukuran'] || '-',
+            kuantitas: item.kuantitas || item.Kuantitas || '-',
+            satuan: item.nama_satuan || item['Nama Satuan'] || '-',
+            tahun: item.tahun_pembuatan || item['Tahun Pembuatan'] || '-',
+            asal: item.asal_barang || item['Asal Barang'] || '-',
+            tgl_penyerahan: item.tgl_penyerahan || item['Tgl Penyerahan/ Perolehan'] || '-',
+            kondisi: item.kondisi_barang || item['Kondisi Barang'] || '-',
+            harga: item.harga || item.Harga || '-',
+            ruang: item.ruang || item.Ruang || '-',
+            status: item.status || item.Status || 'Aktif',
+            tempat: item.tempat || item.Tempat || '-',
+            pembelian: item.pembelian || item.Pembelian || '-'
+        }
+    })
+})
+
+const uniqueNamaBarangList = computed(() => {
+    if (dataMasterBarang.value.length === 0) {
+        let listPerwakilan = dataInventaris.value.filter(item => {
+            const noUrutBrg = String(item.noUrutBarang || item.no_urut_barang || item.no_urut || item.noUrut || item.jb_k || '').trim()
+            return noUrutBrg === '0000' || noUrutBrg === '000' || noUrutBrg === '00' || noUrutBrg === '0'
+        })
+        if (listPerwakilan.length === 0) listPerwakilan = validInventaris.value
+        
+        const names = listPerwakilan.map(item => String(item.nama_barang).trim())
+        return [...new Set(names)].filter(name => {
+            const upper = name.toUpperCase()
+            if (name === "" || name === "-") return false
+            if (upper.includes('BUKU INDUK') || upper.includes('JAKARTA') || upper.includes('NAMA BARANG')) return false
+            if (upper.includes('TANAH DAN BANGUNAN') || upper === 'TANAH' || upper === 'BANGUNAN') return false
+            return true
+        }).sort((a, b) => a.localeCompare(b))
+    }
+
+    const names = dataMasterBarang.value.map(item => {
+         const nama = item["Nama Barang"] || item["nama_barang"] || item["namaBarang"] || "";
+         return String(nama).trim().toUpperCase();
+    })
     
-    ws?.close()
-    useCookie("username").value = null
-    StoreDatas().DeleteDatasWebsocket()
+    return [...new Set(names)].filter(name => name !== "").sort((a, b) => a.localeCompare(b))
 })
+
+const totalInventaris = computed(() => validInventaris.value.length)
+const totalMasihAda = computed(() => validInventaris.value.filter(item => ['','-','aktif','ada'].includes(String(item.status).toLowerCase().trim())).length)
+const totalMutasi = computed(() => validInventaris.value.filter(item => String(item.status).toLowerCase().includes('mutasi')).length)
+const totalHibah = computed(() => validInventaris.value.filter(item => String(item.status).toLowerCase().includes('hibah')).length)
+const totalLelangMusnah = computed(() => validInventaris.value.filter(item => {
+    const s = String(item.status).toLowerCase()
+    return s.includes('lelang') || s.includes('musnah')
+}).length)
+const totalUpgrade = computed(() => validInventaris.value.filter(item => {
+    const s = String(item.status).toLowerCase()
+    return s.includes('upgrade')
+}).length)
+
+const filteredInventaris = computed(() => {
+    let result = validInventaris.value
+    
+    if (selectedFilter.value === 'masih_ada') {
+        result = result.filter(item => ['','-','aktif','ada'].includes(String(item.status).toLowerCase().trim()))
+    } else if (selectedFilter.value === 'mutasi') {
+        result = result.filter(item => String(item.status).toLowerCase().includes('mutasi'))
+    } else if (selectedFilter.value === 'hibah') {
+        result = result.filter(item => String(item.status).toLowerCase().includes('hibah'))
+    } else if (selectedFilter.value === 'lelang_musnah') {
+        result = result.filter(item => {
+            const s = String(item.status).toLowerCase()
+            return s.includes('lelang') || s.includes('musnah')
+        })
+    } else if (selectedFilter.value === 'upgrade') {
+        result = result.filter(item => {
+            const s = String(item.status).toLowerCase()
+            return s.includes('upgrade')
+        })
+    }
+
+    if (selectedNamaBarang.value !== 'all') {
+        const selectedStr = String(selectedNamaBarang.value).toUpperCase().trim();
+        
+        // Cari Master Referensi untuk dropdown yang dipilih
+        const masterRef = dataMasterBarang.value.find(m => {
+            const n = String(m["Nama Barang"] || m["nama_barang"] || m["namaBarang"] || "").toUpperCase().trim();
+            return n === selectedStr;
+        })
+
+        // Ambil Data Kode dari Master (Contoh: "B", "05", "05")
+        let masterGol = "", masterKel = "", masterSub = "";
+        if (masterRef) {
+            masterGol = String(masterRef.Gol || masterRef.Golongan || "").trim().charAt(0).toUpperCase();
+            masterKel = String(masterRef.Kel || masterRef.Kelompok || "").trim().padStart(2, '0');
+            masterSub = String(masterRef["Sub-kel"] || masterRef.sub_kel || masterRef.jb_k || "").trim().padStart(2, '0');
+        }
+
+        result = result.filter(item => {
+            const iGol = item.golongan;
+            const iKel = item.kelompok;
+            const iSub = item.kode_kelompok;
+            const cleanItemName = String(item.nama_barang || '').toUpperCase().trim();
+
+            // PRIORITAS 1: NAMA SAMA PERSIS (Termasuk spasi & simbol)
+            if (cleanItemName === selectedStr) return true;
+
+            // PRIORITAS 2: KODE SAMA PERSIS (Mengunci data mutlak sesuai kodenya)
+            const isMasterCodeValid = masterGol !== "" && masterKel !== "00" && masterSub !== "00";
+            const isItemCodeValid = iGol !== "-" && iKel !== "-" && iSub !== "-";
+
+            if (isMasterCodeValid && isItemCodeValid) {
+                if (iGol === masterGol && iKel === masterKel && iSub === masterSub) {
+                    return true;
+                }
+            }
+
+            // PRIORITAS 3: FUZZY TYPO CHECK (Bekerja HANYA JIKA kode item kosong ATAU golongannya sama)
+            // KUNCI PERBAIKAN PENTING: Mencegah 'Lapangan' (A) masuk ke filter 'Kipas Angin' (C)
+            if (iGol !== "-" && masterGol !== "" && iGol !== masterGol) {
+                return false; // Langsung tolak jika beda golongan depan (A != C)!
+            }
+
+            // Hapus spasi dan simbol, bandingkan hanya huruf dan angka
+            const getAlphanumeric = (str: string) => str.replace(/[^A-Z0-9]/g, '');
+            const selectedAlpha = getAlphanumeric(selectedStr);
+            const itemAlpha = getAlphanumeric(cleanItemName);
+
+            if (itemAlpha !== "" && selectedAlpha !== "") {
+                if (itemAlpha === selectedAlpha) return true;
+
+                // Toleransi typo (Mencegah "Mouse" menyusup ke "Mesin Absen")
+                // Hitung beda panjang huruf karakter. JIKA BEDA > 2, MAKA ITU BARANG YANG BERBEDA!
+                const lenDiff = Math.abs(itemAlpha.length - selectedAlpha.length);
+                if (lenDiff <= 2) {
+                    // Buang huruf vokal
+                    const itemSkeleton = itemAlpha.replace(/[AEIOU]/g, '');
+                    const selectedSkeleton = selectedAlpha.replace(/[AEIOU]/g, '');
+                    
+                    if (itemSkeleton === selectedSkeleton) return true;
+                    if (itemSkeleton.includes(selectedSkeleton) || selectedSkeleton.includes(itemSkeleton)) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        })
+    }
+    
+    return result.sort((a, b) => String(a.sort_key || '').localeCompare(String(b.sort_key || '')))
+})
+
+const totalPages = computed(() => Math.ceil(filteredInventaris.value.length / itemsPerPage.value))
+const paginatedInventaris = computed(() => filteredInventaris.value.slice((currentPage.value - 1) * itemsPerPage.value, currentPage.value * itemsPerPage.value))
+
+watch([selectedFilter, selectedNamaBarang], () => { currentPage.value = 1 })
+onMounted(() => { fetchBukuIndukData() })
 </script>
 
 <template>
-    <div class="login-wrapper">
-        <div class="login-card">
-            <div class="login-header">
-                <!-- Icon Gedung / Lembaga -->
-                <svg xmlns="http://www.w3.org/2000/svg" class="icon" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 2L2 7l2 1v11h16V8l2-1-2-5zm-2 15H6v-6h4v6zm8 0h-4v-6h4v6zm-4-8H8V7h8v2z"/>
-                </svg>
-                <h2>Pilih Sesi Lembaga</h2>
+    <div class="app-layout">
+        <Navbar />
+
+        <main class="dashboard-container">
+            <div class="header-container">
+                <h1 class="page-title">Buku Induk Inventaris</h1>
+                <button @click="showModal = true" class="btn-submit">+ Tambah Data</button>
             </div>
-            
-            <form @submit="onLogin" class="login-form">
-                <div class="form-group">
-                    <label>Username / Nama Admin</label>
-                    <input 
-                        v-model="datas.username" 
-                        placeholder="Contoh: admin123" 
-                        type="text" 
-                        class="form-control"
-                        required 
-                    />
+
+            <!-- MODAL FORM -->
+            <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
+                <div class="modal-content modal-large form-section">
+                    <div class="form-header">
+                        <h3>Tambah Data Cepat ({{ selectedLembaga }})</h3>
+                        <button @click="showModal = false" class="btn-close" title="Tutup">✕</button>
+                    </div>
+                    
+                    <form @submit.prevent="submitForm" class="data-form form-scrollable">
+                        <div class="form-grid-2-cols">
+                            
+                            <!-- Kolom Kiri -->
+                            <div class="input-col">
+                                <div class="form-group">
+                                    <label>Nama Barang *</label>
+                                    <input type="text" v-model="formData.nama_barang" list="listBarang" placeholder="Pilih / ketik nama barang..." required class="input-box" />
+                                    <datalist id="listBarang">
+                                        <option v-for="(nama, idx) in uniqueNamaBarangList" :key="idx" :value="nama"></option>
+                                    </datalist>
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Ket / Merk / Nomor / Ukuran</label>
+                                    <input type="text" v-model="formData.ket_merk_ukuran" placeholder="dual core ( ASUS H110)  Upgrade 2020" class="input-box" />
+                                </div>
+
+                                <div class="form-group-inline">
+                                    <div class="form-group half">
+                                        <label>Kuantitas</label>
+                                        <input type="number" v-model="formData.kuantitas" class="input-box" />
+                                    </div>
+                                    <div class="form-group half">
+                                        <label>Satuan</label>
+                                        <input type="text" v-model="formData.nama_satuan" placeholder="buah/unit" class="input-box" />
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Tahun Pembuatan</label>
+                                    <input type="text" v-model="formData.tahun_pembuatan" placeholder="Contoh: 2023" class="input-box" />
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Harga (Rp)</label>
+                                    <input type="text" v-model="formData.harga" placeholder="Contoh: Rp 150.000" class="input-box" />
+                                </div>
+                            </div>
+
+                            <!-- Kolom Kanan -->
+                            <div class="input-col">
+                                <div class="form-group">
+                                    <label>Asal Barang</label>
+                                    <select v-model="formData.asal_barang" class="input-box">
+                                        <option value="YBW II">YBW II</option>
+                                        <option value="BOS SMA">BOS SMA</option>
+                                        <option value="BOS SMK">BOS SMK</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Tgl Penyerahan / Perolehan</label>
+                                    <input type="date" v-model="formData.tgl_penyerahan" class="input-box" />
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Kondisi Barang</label>
+                                    <select v-model="formData.kondisi_barang" class="input-box">
+                                        <option value="baru">Baru</option>
+                                        <option value="baik">Baik</option>
+                                        <option value="rusak ringan">Rusak Ringan</option>
+                                        <option value="rusak berat">Rusak Berat</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Ruang</label>
+                                    <input type="text" v-model="formData.ruang" placeholder="Contoh: Ruang Guru" class="input-box" />
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Tempat (Opsional)</label>
+                                    <input type="text" v-model="formData.tempat" placeholder="Lokasi spesifik..." class="input-box" />
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Sumber Pembelian (Opsional)</label>
+                                    <input type="text" v-model="formData.pembelian" placeholder="Contoh: Belanja Langsung" class="input-box" />
+                                </div>
+                            </div>
+                        </div> 
+
+                        <div class="form-actions mt-4">
+                            <button type="submit" class="btn-submit" :disabled="isSubmitting" style="width: 100%; padding: 14px; font-size: 16px;">
+                                <span v-if="isSubmitting">Memvalidasi & Menyimpan Data...</span>
+                                <span v-else>+ Simpan Data Inventaris</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div v-if="isLoading" class="loading-state">Memuat data {{ selectedLembaga }}...</div>
+
+            <div v-else>
+                <!-- STATISTIK -->
+                <div class="stats-grid">
+                    <div class="stat-card blue" :class="{ active: selectedFilter === 'all' }" @click="selectedFilter = 'all'">
+                        <div class="card-info"><span class="card-title">TOTAL INVENTARIS</span><h2 class="card-value">{{ totalInventaris }}</h2></div>
+                    </div>
+                    <div class="stat-card teal" :class="{ active: selectedFilter === 'masih_ada' }" @click="selectedFilter = 'masih_ada'">
+                        <div class="card-info"><span class="card-title">MASIH ADA / AKTIF</span><h2 class="card-value">{{ totalMasihAda }}</h2></div>
+                    </div>
+                    <div class="stat-card purple" :class="{ active: selectedFilter === 'mutasi' }" @click="selectedFilter = 'mutasi'">
+                        <div class="card-info"><span class="card-title">DIMUTASI</span><h2 class="card-value">{{ totalMutasi }}</h2></div>
+                    </div>
+                    <div class="stat-card green" :class="{ active: selectedFilter === 'hibah' }" @click="selectedFilter = 'hibah'">
+                        <div class="card-info"><span class="card-title">DIHIBAHKAN</span><h2 class="card-value">{{ totalHibah }}</h2></div>
+                    </div>
+                    <div class="stat-card orange" :class="{ active: selectedFilter === 'lelang_musnah' }" @click="selectedFilter = 'lelang_musnah'">
+                        <div class="card-info"><span class="card-title">LELANG / MUSNAHKAN</span><h2 class="card-value">{{ totalLelangMusnah }}</h2></div>
+                    </div>
+                    <div class="stat-card cyan" :class="{ active: selectedFilter === 'upgrade' }" @click="selectedFilter = 'upgrade'">
+                        <div class="card-info"><span class="card-title">DI-UPGRADE</span><h2 class="card-value">{{ totalUpgrade }}</h2></div>
+                    </div>
                 </div>
 
-                <div class="form-group">
-                    <label>Password</label>
-                    <input 
-                        v-model="datas.password" 
-                        placeholder="*********" 
-                        type="password" 
-                        class="form-control"
-                        required 
-                    />
-                </div>
+                <div class="table-section">
+                    <div class="table-controls" style="flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between;">
+                        <div style="display: flex; gap: 15px; flex-wrap: wrap;">
+                            <div class="filter-group">
+                                <label for="pilihLembaga" style="color: #0f172a;">Lembaga:</label>
+                                <select id="pilihLembaga" v-model="selectedLembaga" class="select-box" style="min-width: 120px; font-weight: 600;">
+                                    <option value="SMA">SMA</option><option value="SMK">SMK</option><option value="YAYASAN">YAYASAN</option>
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label for="filterStatus">Status:</label>
+                                <select id="filterStatus" v-model="selectedFilter" class="select-box" style="min-width: 150px;">
+                                    <option value="all">Semua Status</option>
+                                    <option value="masih_ada">Aktif / Masih Ada</option>
+                                    <option value="mutasi">Dimutasi</option>
+                                    <option value="hibah">Dihibahkan</option>
+                                    <option value="upgrade">Di-Upgrade</option>
+                                    <option value="lelang_musnah">Lelang/Musnahkan</option>
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label for="filterBarang">Pilih Barang:</label>
+                                <select id="filterBarang" v-model="selectedNamaBarang" class="select-box">
+                                    <option value="all">Semua Barang</option>
+                                    <option v-for="(nama, idx) in uniqueNamaBarangList" :key="idx" :value="nama">{{ nama }}</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="table-info" style="margin-top: 15px; width: 100%;">
+                            <h3>Daftar Inventaris <span class="text-capitalize">{{ selectedLembaga }}</span></h3>
+                            <span class="badge-count">Menampilkan {{ filteredInventaris.length }} data</span>
+                        </div>
+                    </div>
 
-                <div class="form-group">
-                    <label>Tipe Lembaga</label>
-                    <select v-model="selectedTipeLembaga" class="form-control select-control" required>
-                        <option value="" disabled selected>-- Pilih Lembaga --</option>
-                        <!-- PERBAIKAN DI SINI: Mengambil value dan text dari properti objek 'tipe_lembaga' -->
-                        <option v-for="(item, index) in allTipeLembaga" :key="index" :value="item">
-                            {{ item.tipe_lembaga }}
-                        </option>
-                    </select>
-                </div>
+                    <div class="table-wrapper">
+                        <table class="data-table wide-table">
+                            <thead>
+                                <tr>
+                                    <th>No</th>
+                                    <th>Tgl Pembukuan</th>
+                                    <th>Gol</th>
+                                    <th>Kel</th>
+                                    <th>JB-K</th>
+                                    <th>No Urut Brg</th>
+                                    <th>Nama Barang</th>
+                                    <th>Ket Merk/Ukuran</th>
+                                    <th>Qty</th>
+                                    <th>Satuan</th>
+                                    <th>Tahun</th>
+                                    <th>Asal</th>
+                                    <th>Tgl Perolehan</th>
+                                    <th>Kondisi</th>
+                                    <th>Harga</th>
+                                    <th>Ruang</th>
+                                    <th>Status</th>
+                                    <th>Tempat</th>
+                                    <th>Pembelian</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-if="filteredInventaris.length === 0"><td colspan="20" class="text-center">Tidak ada data.</td></tr>
+                                
+                                <tr v-for="(item, index) in paginatedInventaris" :key="item._tempId">
+                                    <!-- Jika Baris Sedang Di-Edit (INLINE EDIT FORM) -->
+                                    <template v-if="editingItem === item._tempId">
+                                        <td>{{ item.noUrut || item.no_urut || ((currentPage - 1) * itemsPerPage + index + 1) }}</td>
+                                        <td><input type="text" v-model="editForm.tgl_pembukuan" class="edit-input" /></td>
+                                        <td class="readonly-text">{{ item.golongan }}</td>
+                                        <td class="readonly-text">{{ item.kelompok }}</td>
+                                        <td class="readonly-text">{{ item.kode_kelompok }}</td>
+                                        <td class="readonly-text"><strong>{{ item.no_urut_barang }}</strong></td>
+                                        
+                                        <!-- Nama Barang dilock karena ini kunci pencarian/update di Apps Script -->
+                                        <td class="sticky-col readonly-text">{{ editForm.nama_barang }}</td> 
+                                        
+                                        <td><input type="text" v-model="editForm.ket_merk" class="edit-input" /></td>
+                                        <td><input type="number" v-model="editForm.kuantitas" class="edit-input small-input" /></td>
+                                        <td><input type="text" v-model="editForm.satuan" class="edit-input small-input" /></td>
+                                        <td><input type="text" v-model="editForm.tahun" class="edit-input small-input" /></td>
+                                        <td><input type="text" v-model="editForm.asal" class="edit-input" /></td>
+                                        <td><input type="text" v-model="editForm.tgl_penyerahan" class="edit-input" /></td>
+                                        <td>
+                                            <select v-model="editForm.kondisi" class="edit-input">
+                                                <option value="baru">Baru</option><option value="baik">Baik</option>
+                                                <option value="rusak ringan">Rusak Ringan</option><option value="rusak berat">Rusak Berat</option>
+                                            </select>
+                                        </td>
+                                        <td><input type="text" v-model="editForm.harga" class="edit-input" /></td>
+                                        <td><input type="text" v-model="editForm.ruang" class="edit-input" /></td>
+                                        <td>
+                                            <select v-model="editForm.status" class="edit-input">
+                                                <option value="Aktif">Aktif</option>
+                                                <option value="Dimutasi">Dimutasi</option>
+                                                <option value="Dihibahkan">Dihibahkan</option>
+                                                <option value="Lelang/Musnahkan">Lelang/Musnahkan</option>
+                                                <option value="TerUpgrade">Upgrade</option>
+                                            </select>
+                                        </td>
+                                        <td><input type="text" v-model="editForm.tempat" class="edit-input" /></td>
+                                        <td><input type="text" v-model="editForm.pembelian" class="edit-input" /></td>
+                                        <td class="action-cell">
+                                            <button @click="saveEdit" :disabled="isSavingEdit" class="btn-icon save-btn" title="Simpan">✓</button>
+                                            <button @click="cancelEdit" :disabled="isSavingEdit" class="btn-icon cancel-btn" title="Batal">✕</button>
+                                        </td>
+                                    </template>
 
-                <button type="submit" class="btn-login">Login</button>
-            </form>
-        </div>
+                                    <!-- Jika Tampilan Normal -->
+                                    <template v-else>
+                                        <td>{{ item.noUrut || item.no_urut || ((currentPage - 1) * itemsPerPage + index + 1) }}</td>
+                                        <td>{{ item.tgl_pembukuan }}</td>
+                                        <td>{{ item.golongan }}</td>
+                                        <td>{{ item.kelompok }}</td>
+                                        <td>{{ item.kode_kelompok }}</td>
+                                        <td><strong>{{ item.no_urut_barang }}</strong></td>
+                                        <td class="sticky-col">{{ item.nama_barang }}</td>
+                                        <td>{{ item.ket_merk }}</td>
+                                        <td>{{ item.kuantitas }}</td>
+                                        <td>{{ item.satuan }}</td>
+                                        <td>{{ item.tahun }}</td>
+                                        <td>{{ item.asal }}</td>
+                                        <td>{{ item.tgl_penyerahan }}</td>
+                                        <td>{{ item.kondisi }}</td>
+                                        <td>{{ item.harga }}</td>
+                                        <td>{{ item.ruang }}</td>
+                                        <td><span class="status-badge" :class="item.status ? String(item.status).toLowerCase().replace(/[^a-z]/g, '') : 'aktif'">{{ item.status || 'Aktif' }}</span></td>
+                                        <td>{{ item.tempat }}</td>
+                                        <td>{{ item.pembelian }}</td>
+                                        <td class="action-cell">
+                                            <button @click="startEdit(item)" class="btn-icon edit-btn" title="Edit">✎</button>
+                                            <button @click="deleteItem(item)" class="btn-icon delete-btn" title="Hapus">🗑</button>
+                                        </td>
+                                    </template>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="pagination-container" v-if="totalPages > 0">
+                        <button class="btn-page" :disabled="currentPage === 1" @click="currentPage--">&laquo; Sebelumnya</button>
+                        <span class="page-info">Halaman <strong>{{ currentPage }}</strong> dari {{ totalPages }}</span>
+                        <button class="btn-page" :disabled="currentPage === totalPages" @click="currentPage++">Selanjutnya &raquo;</button>
+                    </div>
+                </div>
+            </div>
+        </main>
     </div>
 </template>
 
 <style scoped>
-/* Reset dasar untuk font */
-* {
-    box-sizing: border-box;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-}
+.app-layout { display: flex; min-height: 100vh; background-color: #f8fafc; }
+.dashboard-container { flex: 1; padding: 30px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; width: calc(100% - 250px); overflow-x: hidden; }
+.header-container { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.header-container .page-title { font-size: 26px; font-weight: 800; color: #0f172a; margin: 0; }
+.loading-state { color: #64748b; font-size: 14px; padding: 20px 0; text-align: center; }
 
-/* Latar belakang abu-abu penuh */
-.login-wrapper {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-    background-color: #696969; 
-}
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.6); display: flex; justify-content: center; align-items: center; z-index: 1000; padding: 20px; backdrop-filter: blur(4px); }
+.modal-content { background: #ffffff; width: 100%; max-width: 900px; border-radius: 12px; padding: 24px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); animation: modalIn 0.3s ease-out; border-top: 4px solid #3b82f6; }
+.modal-large { max-width: 800px; max-height: 90vh; display: flex; flex-direction: column; }
+@keyframes modalIn { from { opacity: 0; transform: translateY(-30px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
+.btn-close { background: none; border: none; font-size: 20px; font-weight: bold; color: #94a3b8; cursor: pointer; transition: color 0.2s; padding: 0 8px; }
+.btn-close:hover { color: #ef4444; }
 
-/* Kotak putih form (Card) */
-.login-card {
-    background-color: #ffffff;
-    width: 100%;
-    max-width: 420px;
-    padding: 30px 40px;
-    border-radius: 12px;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-}
+.form-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; }
+.form-header h3 { font-size: 18px; font-weight: 700; color: #1e293b; margin: 0; }
+.form-scrollable { overflow-y: auto; padding-right: 10px; } 
+.form-grid-2-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; } 
+@media (max-width: 768px) { .form-grid-2-cols { grid-template-columns: 1fr; } } 
+.input-col { display: flex; flex-direction: column; gap: 16px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-group-inline { display: flex; gap: 15px; }
+.half { width: 50%; }
+.form-group label { font-size: 13px; font-weight: 600; color: #475569; }
+.input-box { padding: 10px 14px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; color: #334155; outline: none; }
+.input-box:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15); }
+.mt-4 { margin-top: 1.5rem; }
+.btn-submit { background-color: #3b82f6; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background-color 0.2s; }
+.btn-submit:hover:not(:disabled) { background-color: #2563eb; }
+.btn-submit:disabled { background-color: #94a3b8; cursor: not-allowed; }
 
-/* Bagian Judul dan Ikon */
-.login-header {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    margin-bottom: 25px;
-}
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 30px; }
+.stat-card { background-color: #ffffff; border-radius: 12px; padding: 18px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); border-left: 5px solid #cbd5e1; cursor: pointer; transition: all 0.2s ease; }
+.stat-card:hover { transform: translateY(-2px); }
+.stat-card.active { box-shadow: 0 0 0 2px #3b82f6, 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+.stat-card.blue { border-left-color: #3b82f6; }
+.stat-card.teal { border-left-color: #14b8a6; }
+.stat-card.purple { border-left-color: #8b5cf6; }
+.stat-card.green { border-left-color: #10b981; }
+.stat-card.orange { border-left-color: #f59e0b; }
+.stat-card.cyan { border-left-color: #06b6d4; }
+.card-title { font-size: 10px; font-weight: 700; color: #64748b; }
+.card-value { font-size: 24px; font-weight: 700; color: #0f172a; margin-top: 8px; }
 
-.login-header h2 {
-    margin: 0;
-    font-size: 20px;
-    font-weight: 700;
-    color: #1a202c;
-}
+.table-section { background-color: #ffffff; border-radius: 12px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+.table-controls { display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid #e2e8f0; }
+.table-info { display: flex; justify-content: space-between; align-items: center; }
+.table-info h3 { font-size: 16px; font-weight: 600; color: #1e293b; margin: 0; }
+.filter-group { display: flex; align-items: center; gap: 10px; }
+.filter-group label { font-size: 13px; font-weight: 600; color: #475569; }
+.select-box { padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; background-color: #fff; color: #334155; font-size: 13px; outline: none; cursor: pointer; }
+.badge-count { font-size: 12px; background-color: #e2e8f0; color: #475569; padding: 4px 10px; border-radius: 20px; font-weight: 600; }
 
-.login-header .icon {
-    width: 28px;
-    height: 28px;
-    color: #3b82f6; 
-}
+.table-wrapper { overflow-x: auto; max-width: 100%; border: 1px solid #e2e8f0; border-radius: 8px; }
+.data-table { width: max-content; min-width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
+.data-table th, .data-table td { padding: 12px 14px; border-bottom: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0; white-space: nowrap; }
+.data-table th { background-color: #f8fafc; color: #475569; font-weight: 700; position: sticky; top: 0; z-index: 10; }
+.data-table td { color: #334155; vertical-align: middle; }
+.data-table tr:hover { background-color: #f1f5f9; }
 
-/* Pengaturan form */
-.login-form {
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-}
+.sticky-col { position: sticky; left: 0; background-color: #fff; z-index: 5; box-shadow: 2px 0 5px rgba(0,0,0,0.05); font-weight: 600; }
+.data-table th.sticky-col { background-color: #f8fafc; z-index: 15; }
 
-.form-group {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
+.text-center { text-align: center; color: #94a3b8; padding: 24px !important; }
+.text-capitalize { text-transform: capitalize; }
 
-.form-group label {
-    font-size: 13px;
-    font-weight: 600;
-    color: #4a5568;
-}
+.status-badge { background-color: #f1f5f9; color: #475569; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.status-badge.aktif { background-color: #dcfce7; color: #166534; }
+.status-badge.dimutasi { background-color: #f3e8ff; color: #6b21a8; }
+.status-badge.dihibahkan { background-color: #dbeafe; color: #1e40af; }
+.status-badge.lelangmusnahkan { background-color: #fee2e2; color: #991b1b; }
+.status-badge.terupgrade { background-color: #e0f2fe; color: #0369a1; }
 
-/* Styling Input dan Select */
-.form-control {
-    width: 100%;
-    padding: 10px 14px;
-    border: 1px solid #e2e8f0;
-    border-radius: 6px;
-    font-size: 14px;
-    color: #2d3748;
-    transition: all 0.2s ease-in-out;
-    outline: none;
-}
+.pagination-container { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding-top: 15px; }
+.btn-page { background-color: #ffffff; border: 1px solid #cbd5e1; color: #334155; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.btn-page:hover:not(:disabled) { background-color: #f8fafc; border-color: #94a3b8; }
+.btn-page:disabled { background-color: #f8fafc; color: #94a3b8; cursor: not-allowed; border-color: #e2e8f0; }
+.page-info { font-size: 13px; color: #475569; }
 
-.form-control:focus {
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
-}
+/* INLINE EDIT STYLES */
+.edit-input { width: 100%; min-width: 100px; padding: 6px 8px; border: 1px solid #3b82f6; border-radius: 4px; font-size: 12px; outline: none; background-color: #eff6ff; }
+.edit-input:focus { box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2); }
+.small-input { min-width: 50px; }
+.readonly-text { color: #94a3b8 !important; background-color: #f8fafc !important; }
 
-.select-control {
-    cursor: pointer;
-    background-color: white;
-}
-
-/* Tombol Login */
-.btn-login {
-    margin-top: 10px;
-    background-color: #3b82f6;
-    color: #ffffff;
-    border: none;
-    padding: 12px;
-    font-size: 15px;
-    font-weight: 600;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: background-color 0.2s;
-}
-
-.btn-login:hover {
-    background-color: #2563eb;
-}
+.action-cell { display: flex; gap: 8px; justify-content: center; }
+.btn-icon { background: none; border: none; font-size: 14px; cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: 0.2s; display: flex; align-items: center; justify-content: center;}
+.edit-btn { color: #3b82f6; background-color: #eff6ff; }
+.edit-btn:hover { background-color: #3b82f6; color: white; }
+.delete-btn { color: #ef4444; background-color: #fef2f2; }
+.delete-btn:hover { background-color: #ef4444; color: white; }
+.save-btn { color: #10b981; background-color: #ecfdf5; font-weight: bold; }
+.save-btn:hover { background-color: #10b981; color: white; }
+.cancel-btn { color: #64748b; background-color: #f1f5f9; font-weight: bold;}
+.cancel-btn:hover { background-color: #64748b; color: white; }
 </style>
