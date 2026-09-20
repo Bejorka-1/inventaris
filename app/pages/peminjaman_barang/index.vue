@@ -7,11 +7,7 @@ import Navbar from '~/components/Navbar.vue'
 const GOOGLE_SCRIPT_URL = "http://127.0.0.1:8000/api/inventaris"
 
 const dataPeminjaman = ref<any[]>([])
-const dataMasterKode = ref<any[]>([])
 const isLoading = ref(true)
-const isSubmitting = ref(false)
-
-const activeTab = ref('daftar') // 'daftar' atau 'form'
 
 // Inline Edit State
 const editingItem = ref<any>(null)
@@ -59,18 +55,8 @@ const formatSimpleDate = (dateVal: any): string => {
     return str;
 }
 
-const formPinjam = ref({
-    nama_barang: '',
-    selected_barang: null as any,
-    ket_merk_ukuran: '',
-    peminjam: '',
-    kuantitas: 1,
-    tanggal_pinjam: getTodayDate(),
-    keterangan: ''
-})
-
 // ==========================================
-// 1. FETCH DATA
+// 1. FETCH DATA PEMINJAMAN SAJA
 // ==========================================
 const fetchData = async () => {
     isLoading.value = true
@@ -80,20 +66,6 @@ const fetchData = async () => {
         if (resultPeminjaman.status === 200) {
             dataPeminjaman.value = (resultPeminjaman.datas || []).map((v:any, i:number) => ({...v, _tempId: i}))
         }
-
-        const resMaster = await fetch(`${GOOGLE_SCRIPT_URL}?action=kode_barang`, { method: "GET" })
-        const resultMaster = await resMaster.json()
-        if (resultMaster.status === 200 && resultMaster.datas) {
-             dataMasterKode.value = resultMaster.datas.filter((item: any) => {
-                 const nama = item["Nama Barang"] || item["nama_barang"];
-                 return nama && String(nama).trim() !== ""
-             }).map((item:any) => ({
-                 gol: item.Gol || item.gol,
-                 kel: String(item.Kel || item.kel || '00').padStart(2, '0'),
-                 sub: String(item['Sub-kel'] || item.sub_kel || item.jb_k || '00').padStart(2, '0'),
-                 nama_barang: item["Nama Barang"] || item.nama_barang
-             }))
-        }
     } catch (error) {
         toast("Terjadi kesalahan koneksi saat memuat data", { type: "error" })
     } finally {
@@ -101,72 +73,8 @@ const fetchData = async () => {
     }
 }
 
-const handlePilihBarang = () => {
-    const selected = dataMasterKode.value.find(b => String(b.nama_barang).toUpperCase() === String(formPinjam.value.nama_barang).toUpperCase());
-    if (selected) {
-        formPinjam.value.selected_barang = selected;
-    } else {
-        formPinjam.value.selected_barang = null;
-    }
-}
-
 // ==========================================
-// 2. SUBMIT PEMINJAMAN BARU (MENUNGGU KONFIRMASI)
-// ==========================================
-const submitPeminjaman = async () => {
-    if (!formPinjam.value.peminjam || !formPinjam.value.nama_barang) {
-        return toast("Harap isi Nama Peminjam dan Nama Barang!", { type: "warning" })
-    }
-
-    isSubmitting.value = true
-    try {
-        const b = formPinjam.value.selected_barang || {}
-        let tgl = formPinjam.value.tanggal_pinjam
-        if (tgl && tgl.includes('-')) tgl = `${tgl.split('-')[2]}/${tgl.split('-')[1]}/${tgl.split('-')[0]}`
-
-        const payload = {
-            action: "tambah_peminjaman",
-            gol: b.gol || "",
-            kel: b.kel || "",
-            sub_kel: b.sub || "",
-            nama_barang: formPinjam.value.nama_barang,
-            ket_merk_ukuran: formPinjam.value.ket_merk_ukuran,
-            peminjam: formPinjam.value.peminjam,
-            kuantitas: formPinjam.value.kuantitas,
-            tanggal_pinjam: tgl,
-            keterangan: formPinjam.value.keterangan,
-            
-            // Pengamanan Ganda untuk Backend
-            status: "Menunggu Konfirmasi",
-            status_peminjaman: "Menunggu Konfirmasi",
-            status_pengembalian: "Belum Kembali"
-        }
-
-        const res = await fetch(GOOGLE_SCRIPT_URL, {
-            method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload)
-        })
-        const result = await res.json()
-
-        if (result.status === 200) {
-            toast("Request peminjaman berhasil dibuat!", { type: "success" })
-            formPinjam.value = {
-                nama_barang: '', selected_barang: null, ket_merk_ukuran: '',
-                peminjam: '', kuantitas: 1, tanggal_pinjam: getTodayDate(), keterangan: ''
-            }
-            activeTab.value = 'daftar'
-            fetchData() 
-        } else {
-            toast(result.message || "Gagal menyimpan", { type: "error" })
-        }
-    } catch (error) {
-        toast("Kesalahan jaringan saat mengirim form", { type: "error" })
-    } finally {
-        isSubmitting.value = false
-    }
-}
-
-// ==========================================
-// 3. SETUJUI PINJAMAN (Menunggu Konfirmasi -> Dipinjam)
+// 2. SETUJUI PINJAMAN (Menunggu Konfirmasi -> Dipinjam)
 // ==========================================
 const approvePeminjaman = async (item: any) => {
     if (!confirm(`Setujui peminjaman ${item.nama_barang} untuk ${item.peminjam}?`)) return
@@ -205,7 +113,7 @@ const approvePeminjaman = async (item: any) => {
 }
 
 // ==========================================
-// 4. KONFIRMASI PENGEMBALIAN (Dipinjam -> Selesai)
+// 3. KONFIRMASI PENGEMBALIAN (Dipinjam -> Selesai)
 // ==========================================
 const markAsReturned = async (item: any) => {
     if (!confirm(`Konfirmasi pengembalian barang dari ${item.peminjam} hari ini?`)) return
@@ -240,7 +148,7 @@ const markAsReturned = async (item: any) => {
 }
 
 // ==========================================
-// 5. INLINE EDIT DATA (POST)
+// 4. INLINE EDIT DATA (POST)
 // ==========================================
 const startInlineEdit = (item: any) => {
     editingItem.value = item._tempId
@@ -299,7 +207,7 @@ const saveInlineEdit = async (item: any) => {
 }
 
 // ==========================================
-// 6. HAPUS DATA PEMINJAMAN (POST)
+// 5. HAPUS DATA PEMINJAMAN (POST)
 // ==========================================
 const deleteData = async (item: any) => {
     if (!confirm(`Hapus riwayat peminjaman atas nama ${item.peminjam} secara permanen?`)) return
@@ -322,11 +230,6 @@ const deleteData = async (item: any) => {
         toast("Kesalahan koneksi", { type: "error" })
     }
 }
-
-const uniqueBarangList = computed(() => {
-    const names = dataMasterKode.value.map(item => String(item.nama_barang).toUpperCase().trim())
-    return [...new Set(names)].sort()
-})
 
 const sortedPeminjaman = computed(() => {
     return [...dataPeminjaman.value].reverse()
@@ -359,17 +262,12 @@ onMounted(() => { fetchData() })
                     <h1 class="page-title">Manajemen Peminjaman Barang</h1>
                     <p class="subtitle">Kelola sirkulasi peminjaman dan pengembalian aset sekolah.</p>
                 </div>
-                
-                <div class="tab-controls">
-                    <button class="tab-btn" :class="{ active: activeTab === 'daftar' }" @click="activeTab = 'daftar'">Daftar Peminjaman</button>
-                    <button class="tab-btn" :class="{ active: activeTab === 'form' }" @click="activeTab = 'form'">+ Pinjam Barang</button>
-                </div>
             </div>
 
             <!-- ============================================== -->
             <!-- TABEL DAFTAR PEMINJAMAN                        -->
             <!-- ============================================== -->
-            <div v-if="activeTab === 'daftar'">
+            <div>
                 <div v-if="isLoading" class="loading-state">
                     <div class="spinner"></div><p>Memuat Data Peminjaman...</p>
                 </div>
@@ -382,7 +280,6 @@ onMounted(() => { fetchData() })
                                     <th style="width: 50px; text-align: center;">No</th>
                                     <th>Peminjam</th>
                                     <th>Nama Barang</th>
-                                    <th>Ket/Merk</th>
                                     <th style="text-align: center;">Qty</th>
                                     <th>Tgl Pinjam</th>
                                     <th>Tgl Kembali</th>
@@ -394,7 +291,7 @@ onMounted(() => { fetchData() })
                             </thead>
                             <tbody>
                                 <tr v-if="sortedPeminjaman.length === 0">
-                                    <td colspan="11" class="text-center">Belum ada riwayat peminjaman.</td>
+                                    <td colspan="10" class="text-center">Belum ada riwayat peminjaman.</td>
                                 </tr>
                                 
                                 <tr v-for="(item, index) in paginatedPeminjaman" :key="item._tempId">
@@ -406,7 +303,6 @@ onMounted(() => { fetchData() })
                                         <!-- KOLOM READ-ONLY -->
                                         <td><strong>{{ item.peminjam }}</strong></td>
                                         <td class="sticky-col">{{ item.nama_barang }} <br> <span class="kode-kecil" v-if="item.gol">{{ item.gol }} {{ item.kel }} {{ item.sub_kel }}</span></td>
-                                        <td style="color: #475569;">{{ item.ket_merk_ukuran || '-' }}</td>
                                         <td style="text-align: center;">{{ item.kuantitas }}</td>
                                         <td>{{ formatSimpleDate(item.tanggal_pinjam) }}</td>
                                         <td>{{ formatSimpleDate(item.tanggal_pengembalian) }}</td>
@@ -442,7 +338,6 @@ onMounted(() => { fetchData() })
                                         <td style="text-align: center; color: #64748b;">{{ item.no_urut }}</td>
                                         <td><strong>{{ item.peminjam }}</strong></td>
                                         <td class="sticky-col">{{ item.nama_barang }} <br> <span class="kode-kecil" v-if="item.gol">{{ item.gol }} {{ item.kel }} {{ item.sub_kel }}</span></td>
-                                        <td style="color: #475569;">{{ item.ket_merk_ukuran || '-' }}</td>
                                         <td style="text-align: center;">{{ item.kuantitas }}</td>
                                         
                                         <td>{{ formatSimpleDate(item.tanggal_pinjam) }}</td>
@@ -509,61 +404,6 @@ onMounted(() => { fetchData() })
                         <button class="btn-page" :disabled="currentPage === totalPages" @click="currentPage++">Selanjutnya &raquo;</button>
                     </div>
                 </div>
-            </div>
-
-            <!-- ============================================== -->
-            <!-- FORM PEMINJAMAN BARU                           -->
-            <!-- ============================================== -->
-            <div v-if="activeTab === 'form'" class="form-section">
-                <form @submit.prevent="submitPeminjaman" class="data-form">
-                    <h3>Form Peminjaman Barang Baru</h3>
-                    <div class="form-grid-2-cols mt-4">
-                        <div class="input-col">
-                            <div class="form-group">
-                                <label>Nama Peminjam *</label>
-                                <input type="text" v-model="formPinjam.peminjam" placeholder="Nama Guru / Siswa" required class="input-box" />
-                            </div>
-
-                            <div class="form-group">
-                                <label>Nama Barang *</label>
-                                <input type="text" v-model="formPinjam.nama_barang" @change="handlePilihBarang" list="listMaster" placeholder="Pilih barang..." required class="input-box" style="text-transform: uppercase;" />
-                                <datalist id="listMaster">
-                                    <option v-for="(nama, idx) in uniqueBarangList" :key="idx" :value="nama"></option>
-                                </datalist>
-                                <small v-if="formPinjam.selected_barang" style="color: #10b981;">Kode: {{ formPinjam.selected_barang.gol }} {{ formPinjam.selected_barang.kel }} {{ formPinjam.selected_barang.sub }}</small>
-                            </div>
-
-                            <div class="form-group">
-                                <label>Ket / Merk (Opsional)</label>
-                                <input type="text" v-model="formPinjam.ket_merk_ukuran" placeholder="Warna, merk, atau nomor seri" class="input-box" />
-                            </div>
-                        </div>
-
-                        <div class="input-col">
-                            <div class="form-group">
-                                <label>Tanggal Pinjam *</label>
-                                <input type="date" v-model="formPinjam.tanggal_pinjam" required class="input-box" />
-                            </div>
-
-                            <div class="form-group">
-                                <label>Kuantitas (Jumlah) *</label>
-                                <input type="number" v-model="formPinjam.kuantitas" required min="1" class="input-box" />
-                            </div>
-
-                            <div class="form-group">
-                                <label>Keterangan / Keperluan</label>
-                                <input type="text" v-model="formPinjam.keterangan" placeholder="Contoh: Dipinjam untuk acara pramuka" class="input-box" />
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="form-actions mt-4">
-                        <button type="submit" class="btn-submit w-full" :disabled="isSubmitting">
-                            <span v-if="isSubmitting">Merekam Data...</span>
-                            <span v-else>Request Peminjaman</span>
-                        </button>
-                    </div>
-                </form>
             </div>
 
         </main>
