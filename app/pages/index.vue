@@ -4,10 +4,10 @@ import { toast } from 'vue3-toastify'
 import Navbar from '~/components/Navbar.vue'
 
 // --- GANTI URL INI DENGAN URL DEPLOY ANDA YANG PALING BARU! ---
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzjvzPhMA9WND064RIbRemeQ4zutDvCGs6oJtWrWjMqm4zyWhKr_yrRlEASBEjZLQ/exec"
+const GOOGLE_SCRIPT_URL = "http://127.0.0.1:8000/api/inventaris"
 
 const dataInventaris = ref<any[]>([])
-const dataMasterBarang = ref<any[]>([]) // Menampung Data Master dari Backend
+const dataMasterBarang = ref<any[]>([])
 const isLoading = ref(true)
 const isSubmitting = ref(false)
 
@@ -17,7 +17,7 @@ const fetchSource = ref<'bun' | 'gas'>('gas')
 const selectedFilter = ref('all') 
 const selectedNamaBarang = ref('all') 
 
-// --- STATE UNTUK INLINE EDIT ---
+// State inline edit
 const editingItem = ref<any>(null)
 const editForm = ref<any>({})
 const isSavingEdit = ref(false)
@@ -34,7 +34,7 @@ const formData = ref({
     tanggal_pembukuan: getTodayDate(), 
     nama_barang: '', ket_merk_ukuran: '', kuantitas: '1', nama_satuan: 'buah',
     tahun_pembuatan: '', asal_barang: 'YBW II', tgl_penyerahan: '', 
-    kondisi_barang: 'baru', harga: '', ruang: '', status: '', tempat: '', pembelian: ''
+    kondisi_barang: 'baru', harga: '', ruang: '', status: 'Aktif', tempat: '', pembelian: ''
 })
 
 const currentPage = ref(1)
@@ -58,13 +58,13 @@ const fetchBukuIndukData = async () => {
             return
         }
 
-        dataInventaris.value = (result.datas || []).map((v:any, i:number) => ({...v, _tempId: i}))
+        dataInventaris.value = (result.datas || []).map((v: any, i: number) => ({ ...v, _tempId: i }))
         
         if (resultMaster.status === 200 && resultMaster.datas) {
-             dataMasterBarang.value = resultMaster.datas.filter((item: any) => {
-                 const nama = item["Nama Barang"] || item["nama_barang"] || item["namaBarang"];
-                 return nama && String(nama).trim() !== ""
-             })
+            dataMasterBarang.value = resultMaster.datas.filter((item: any) => {
+                const nama = item["Nama Barang"] || item["nama_barang"] || item["namaBarang"]
+                return nama && String(nama).trim() !== ""
+            })
         }
     } catch (error) {
         console.error("Error fetching data:", error)
@@ -85,23 +85,52 @@ const submitForm = async () => {
         let tglS = formData.value.tgl_penyerahan
         if (tglS && tglS.includes('-')) tglS = `${tglS.split('-')[2]}/${tglS.split('-')[1]}/${tglS.split('-')[0]}`
 
+        // Cari relasi Gol, Kel, Sub dari Master Data agar kolom tidak bergeser dan baris akurat
+        const selectedNama = String(formData.value.nama_barang).toUpperCase().trim()
+        let foundGol = "", foundKel = "", foundSub = ""
+
+        const match = dataMasterBarang.value.find(m => {
+            const mNama = String(m["Nama Barang"] || m["nama_barang"] || m["namaBarang"] || "").toUpperCase().trim()
+            return mNama === selectedNama
+        })
+
+        if (match) {
+            foundGol = String(match.Gol || match.Golongan || "").trim().charAt(0).toUpperCase()
+            foundKel = String(match.Kel || match.Kelompok || "").trim().padStart(2, '0')
+            foundSub = String(match["Sub-kel"] || match.sub_kel || match.jb_k || "").trim().padStart(2, '0')
+        }
+
         const payload = {
-            action: "tambah_inventaris", lembaga: selectedLembaga.value,
-            tanggal_pembukuan: tglP, nama_barang: formData.value.nama_barang,
-            ket_merk_ukuran: formData.value.ket_merk_ukuran, kuantitas: formData.value.kuantitas,
-            nama_satuan: formData.value.nama_satuan, tahun_pembuatan: formData.value.tahun_pembuatan,
-            asal_barang: formData.value.asal_barang, tgl_penyerahan: tglS,
-            kondisi_barang: formData.value.kondisi_barang, harga: formData.value.harga,
-            ruang: formData.value.ruang, status: formData.value.status, tempat: formData.value.tempat, pembelian: formData.value.pembelian
+            action: "tambah_inventaris",
+            lembaga: selectedLembaga.value,
+            tanggal_pembukuan: tglP,
+            gol: foundGol,
+            kel: foundKel,
+            jb_k: foundSub,
+            nama_barang: formData.value.nama_barang,
+            ket_merk_ukuran: formData.value.ket_merk_ukuran,
+            kuantitas: formData.value.kuantitas,
+            nama_satuan: formData.value.nama_satuan,
+            tahun_pembuatan: formData.value.tahun_pembuatan,
+            asal_barang: formData.value.asal_barang,
+            tgl_penyerahan: tglS,
+            kondisi_barang: formData.value.kondisi_barang,
+            harga: formData.value.harga,
+            ruang: formData.value.ruang,
+            status: formData.value.status || 'Aktif',
+            tempat: formData.value.tempat,
+            pembelian: formData.value.pembelian
         }
 
         const res = await fetch(GOOGLE_SCRIPT_URL, {
-            method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload)
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify(payload)
         })
         const result = await res.json()
 
         if (result.status === 200) {
-            toast(`Sukses! Diinput sebagai nomor urut: ${result.data_baru.no_urut_barang}`, { type: "success" })
+            toast(`Sukses! Diinput sebagai nomor urut: ${result.data_baru?.no_urut_barang || 'terakhir'}`, { type: "success" })
             formData.value = {
                 tanggal_pembukuan: getTodayDate(), nama_barang: '', ket_merk_ukuran: '', kuantitas: '1', nama_satuan: 'buah',
                 tahun_pembuatan: '', asal_barang: 'YBW II', tgl_penyerahan: '', kondisi_barang: 'baru', harga: '', 
@@ -122,9 +151,9 @@ const submitForm = async () => {
 const startEdit = (item: any) => {
     editingItem.value = item._tempId
     editForm.value = { 
-        nama_barang_lama: item.nama_barang, 
-        no_urut_barang: item.no_urut_barang,
-        ...item 
+        ...item,
+        nama_barang_lama: item.nama_barang || item.namaBarang, 
+        no_urut_barang: item.no_urut_barang || item.noUrutBarang || item.jb_k
     }
 }
 
@@ -141,15 +170,15 @@ const saveEdit = async () => {
             lembaga: selectedLembaga.value,
             no_urut_barang: editForm.value.no_urut_barang,
             nama_barang_lama: editForm.value.nama_barang_lama, 
-            tanggal_pembukuan: editForm.value.tgl_pembukuan,
+            tanggal_pembukuan: editForm.value.tgl_pembukuan || editForm.value.tanggal_pembukuan,
             nama_barang: editForm.value.nama_barang,
-            ket_merk_ukuran: editForm.value.ket_merk,
+            ket_merk_ukuran: editForm.value.ket_merk || editForm.value.ket_merk_ukuran,
             kuantitas: editForm.value.kuantitas,
-            nama_satuan: editForm.value.satuan,
-            tahun_pembuatan: editForm.value.tahun,
-            asal_barang: editForm.value.asal,
+            nama_satuan: editForm.value.satuan || editForm.value.nama_satuan,
+            tahun_pembuatan: editForm.value.tahun || editForm.value.tahun_pembuatan,
+            asal_barang: editForm.value.asal || editForm.value.asal_barang,
             tgl_penyerahan: editForm.value.tgl_penyerahan,
-            kondisi_barang: editForm.value.kondisi,
+            kondisi_barang: editForm.value.kondisi || editForm.value.kondisi_barang,
             harga: editForm.value.harga,
             ruang: editForm.value.ruang,
             status: editForm.value.status,
@@ -158,7 +187,9 @@ const saveEdit = async () => {
         }
 
         const res = await fetch(GOOGLE_SCRIPT_URL, {
-            method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload)
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify(payload)
         })
         const result = await res.json()
 
@@ -177,18 +208,21 @@ const saveEdit = async () => {
 }
 
 const deleteItem = async (item: any) => {
-    if (!confirm(`Apakah Anda yakin ingin menghapus data "${item.nama_barang}" secara permanen?`)) return
+    const namaTarget = item.nama_barang || item.namaBarang
+    if (!confirm(`Apakah Anda yakin ingin menghapus data "${namaTarget}" secara permanen?`)) return
 
     try {
         const payload = {
             action: "delete_inventaris",
             lembaga: selectedLembaga.value,
-            no_urut_barang: item.no_urut_barang,
-            nama_barang: item.nama_barang
+            no_urut_barang: item.no_urut_barang || item.noUrutBarang || item.jb_k,
+            nama_barang: namaTarget
         }
 
         const res = await fetch(GOOGLE_SCRIPT_URL, {
-            method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload)
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify(payload)
         })
         const result = await res.json()
 
@@ -223,10 +257,9 @@ const validInventaris = computed(() => {
         
         return true
     }).map(item => {
-        // ANTI-KEBOCORAN: Ambil secara murni dan eksak dari baris Excel
-        const rawGol = String(item.gol || item.golongan || '').trim().charAt(0).toUpperCase();
-        const rawKel = String(item.kel || item.kelompok || '').trim().padStart(2, '0');
-        const rawSub = String(item.jb_k || item.kode_kelompok || item.sub_kel || '').trim().padStart(2, '0');
+        const rawGol = String(item.gol || item.golongan || '').trim().charAt(0).toUpperCase()
+        const rawKel = String(item.kel || item.kelompok || '').trim().padStart(2, '0')
+        const rawSub = String(item.jb_k || item.kode_kelompok || item.sub_kel || '').trim().padStart(2, '0')
 
         return {
             ...item,
@@ -234,7 +267,7 @@ const validInventaris = computed(() => {
             golongan: rawGol || '-',
             kelompok: rawKel !== '00' ? rawKel : '-',
             kode_kelompok: rawSub !== '00' ? rawSub : '-',
-            sort_key: `${rawGol} ${rawKel} ${rawSub}`, // Kunci urutan
+            sort_key: `${rawGol} ${rawKel} ${rawSub}`,
             no_urut_barang: item.noUrutBarang || item.no_urut_barang || item.jb_k || '-',
             nama_barang: item.namaBarang || item.nama_barang || '-',
             ket_merk: item.ket_merk_ukuran || item['Ket Merk, Nomor , Ukuran'] || '-',
@@ -261,7 +294,7 @@ const uniqueNamaBarangList = computed(() => {
         })
         if (listPerwakilan.length === 0) listPerwakilan = validInventaris.value
         
-        const names = listPerwakilan.map(item => String(item.nama_barang).trim())
+        const names = listPerwakilan.map(item => String(item.nama_barang || item.namaBarang).trim())
         return [...new Set(names)].filter(name => {
             const upper = name.toUpperCase()
             if (name === "" || name === "-") return false
@@ -272,8 +305,8 @@ const uniqueNamaBarangList = computed(() => {
     }
 
     const names = dataMasterBarang.value.map(item => {
-         const nama = item["Nama Barang"] || item["nama_barang"] || item["namaBarang"] || "";
-         return String(nama).trim().toUpperCase();
+        const nama = item["Nama Barang"] || item["nama_barang"] || item["namaBarang"] || ""
+        return String(nama).trim().toUpperCase()
     })
     
     return [...new Set(names)].filter(name => name !== "").sort((a, b) => a.localeCompare(b))
@@ -314,71 +347,61 @@ const filteredInventaris = computed(() => {
     }
 
     if (selectedNamaBarang.value !== 'all') {
-        const selectedStr = String(selectedNamaBarang.value).toUpperCase().trim();
+        const selectedStr = String(selectedNamaBarang.value).toUpperCase().trim()
         
-        // Cari Master Referensi untuk dropdown yang dipilih
         const masterRef = dataMasterBarang.value.find(m => {
-            const n = String(m["Nama Barang"] || m["nama_barang"] || m["namaBarang"] || "").toUpperCase().trim();
-            return n === selectedStr;
+            const n = String(m["Nama Barang"] || m["nama_barang"] || m["namaBarang"] || "").toUpperCase().trim()
+            return n === selectedStr
         })
 
-        // Ambil Data Kode dari Master (Contoh: "B", "05", "05")
-        let masterGol = "", masterKel = "", masterSub = "";
+        let masterGol = "", masterKel = "", masterSub = ""
         if (masterRef) {
-            masterGol = String(masterRef.Gol || masterRef.Golongan || "").trim().charAt(0).toUpperCase();
-            masterKel = String(masterRef.Kel || masterRef.Kelompok || "").trim().padStart(2, '0');
-            masterSub = String(masterRef["Sub-kel"] || masterRef.sub_kel || masterRef.jb_k || "").trim().padStart(2, '0');
+            masterGol = String(masterRef.Gol || masterRef.Golongan || "").trim().charAt(0).toUpperCase()
+            masterKel = String(masterRef.Kel || masterRef.Kelompok || "").trim().padStart(2, '0')
+            masterSub = String(masterRef["Sub-kel"] || masterRef.sub_kel || masterRef.jb_k || "").trim().padStart(2, '0')
         }
 
         result = result.filter(item => {
-            const iGol = item.golongan;
-            const iKel = item.kelompok;
-            const iSub = item.kode_kelompok;
-            const cleanItemName = String(item.nama_barang || '').toUpperCase().trim();
+            const iGol = item.golongan
+            const iKel = item.kelompok
+            const iSub = item.kode_kelompok
+            const cleanItemName = String(item.nama_barang || '').toUpperCase().trim()
 
-            // PRIORITAS 1: NAMA SAMA PERSIS (Termasuk spasi & simbol)
-            if (cleanItemName === selectedStr) return true;
+            if (cleanItemName === selectedStr) return true
 
-            // PRIORITAS 2: KODE SAMA PERSIS (Mengunci data mutlak sesuai kodenya)
-            const isMasterCodeValid = masterGol !== "" && masterKel !== "00" && masterSub !== "00";
-            const isItemCodeValid = iGol !== "-" && iKel !== "-" && iSub !== "-";
+            const isMasterCodeValid = masterGol !== "" && masterKel !== "00" && masterSub !== "00"
+            const isItemCodeValid = iGol !== "-" && iKel !== "-" && iSub !== "-"
 
             if (isMasterCodeValid && isItemCodeValid) {
                 if (iGol === masterGol && iKel === masterKel && iSub === masterSub) {
-                    return true;
+                    return true
                 }
             }
 
-            // PRIORITAS 3: FUZZY TYPO CHECK (Bekerja HANYA JIKA kode item kosong ATAU golongannya sama)
-            // KUNCI PERBAIKAN PENTING: Mencegah 'Lapangan' (A) masuk ke filter 'Kipas Angin' (C)
             if (iGol !== "-" && masterGol !== "" && iGol !== masterGol) {
-                return false; // Langsung tolak jika beda golongan depan (A != C)!
+                return false
             }
 
-            // Hapus spasi dan simbol, bandingkan hanya huruf dan angka
-            const getAlphanumeric = (str: string) => str.replace(/[^A-Z0-9]/g, '');
-            const selectedAlpha = getAlphanumeric(selectedStr);
-            const itemAlpha = getAlphanumeric(cleanItemName);
+            const getAlphanumeric = (str: string) => str.replace(/[^A-Z0-9]/g, '')
+            const selectedAlpha = getAlphanumeric(selectedStr)
+            const itemAlpha = getAlphanumeric(cleanItemName)
 
             if (itemAlpha !== "" && selectedAlpha !== "") {
-                if (itemAlpha === selectedAlpha) return true;
+                if (itemAlpha === selectedAlpha) return true
 
-                // Toleransi typo (Mencegah "Mouse" menyusup ke "Mesin Absen")
-                // Hitung beda panjang huruf karakter. JIKA BEDA > 2, MAKA ITU BARANG YANG BERBEDA!
-                const lenDiff = Math.abs(itemAlpha.length - selectedAlpha.length);
+                const lenDiff = Math.abs(itemAlpha.length - selectedAlpha.length)
                 if (lenDiff <= 2) {
-                    // Buang huruf vokal
-                    const itemSkeleton = itemAlpha.replace(/[AEIOU]/g, '');
-                    const selectedSkeleton = selectedAlpha.replace(/[AEIOU]/g, '');
+                    const itemSkeleton = itemAlpha.replace(/[AEIOU]/g, '')
+                    const selectedSkeleton = selectedAlpha.replace(/[AEIOU]/g, '')
                     
-                    if (itemSkeleton === selectedSkeleton) return true;
+                    if (itemSkeleton === selectedSkeleton) return true
                     if (itemSkeleton.includes(selectedSkeleton) || selectedSkeleton.includes(itemSkeleton)) {
-                        return true;
+                        return true
                     }
                 }
             }
 
-            return false;
+            return false
         })
     }
     

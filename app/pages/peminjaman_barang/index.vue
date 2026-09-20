@@ -4,7 +4,7 @@ import { toast } from 'vue3-toastify'
 import Navbar from '~/components/Navbar.vue'
 
 // --- SESUAIKAN URL API ANDA ---
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzjvzPhMA9WND064RIbRemeQ4zutDvCGs6oJtWrWjMqm4zyWhKr_yrRlEASBEjZLQ/exec"
+const GOOGLE_SCRIPT_URL = "http://127.0.0.1:8000/api/inventaris"
 
 const dataPeminjaman = ref<any[]>([])
 const dataMasterKode = ref<any[]>([])
@@ -13,38 +13,24 @@ const isSubmitting = ref(false)
 
 const activeTab = ref('daftar') // 'daftar' atau 'form'
 
-// Modal Pengembalian
-const showReturnModal = ref(false)
-const returnForm = ref({
-    no_urut: '',
-    nama_barang: '',
-    peminjam: '',
-    tanggal_pengembalian: '',
-    keterangan: '',
-    status_peminjaman: 'Selesai',
-    status_pengembalian: 'Sudah Kembali'
-})
-
-// Modal Edit
-const showEditModal = ref(false)
+// Inline Edit State
+const editingItem = ref<any>(null)
 const editForm = ref({
     no_urut: '',
-    nama_barang: '',
-    ket_merk_ukuran: '',
-    peminjam: '',
-    kuantitas: 1,
-    tanggal_pinjam: '',
     status_peminjaman: '',
     status_pengembalian: '',
     keterangan: ''
 })
+const isSavingEdit = ref(false)
 
 // Paginasi
 const currentPage = ref(1)
 const itemsPerPage = ref(15)
 
-// Helper Tanggal
-const getTodayDate = () => {
+// ==============================================================================
+// HELPER TANGGAL (100% TYPE-SAFE)
+// ==============================================================================
+const getTodayDate = (): string => {
     const today = new Date()
     const year = today.getFullYear()
     const month = String(today.getMonth() + 1).padStart(2, '0')
@@ -52,11 +38,25 @@ const getTodayDate = () => {
     return `${year}-${month}-${day}`
 }
 
-const formatDateForInput = (dateStr: string) => {
-    if (!dateStr || dateStr === '-') return '';
-    const parts = dateStr.split('/');
-    if (parts.length === 3) return `${parts[2]}-${parts[1]}-${parts[0]}`;
-    return dateStr; 
+const formatSimpleDate = (dateVal: any): string => {
+    const str = String(dateVal || '').trim();
+    if (!str || str === '-' || str === 'undefined' || str === 'null') return '-';
+    
+    if (str.includes('T')) {
+        const parts = str.split('T');
+        const datePart = parts[0] || ''; 
+        if (datePart) {
+            const dateParts = datePart.split('-');
+            if (dateParts.length === 3) return `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
+        }
+    }
+    
+    if (str.includes('-') && str.length === 10) {
+        const parts = str.split('-');
+        if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    
+    return str;
 }
 
 const formPinjam = ref({
@@ -78,7 +78,7 @@ const fetchData = async () => {
         const resPeminjaman = await fetch(`${GOOGLE_SCRIPT_URL}?action=peminjaman`, { method: "GET" })
         const resultPeminjaman = await resPeminjaman.json()
         if (resultPeminjaman.status === 200) {
-            dataPeminjaman.value = resultPeminjaman.datas || []
+            dataPeminjaman.value = (resultPeminjaman.datas || []).map((v:any, i:number) => ({...v, _tempId: i}))
         }
 
         const resMaster = await fetch(`${GOOGLE_SCRIPT_URL}?action=kode_barang`, { method: "GET" })
@@ -95,7 +95,7 @@ const fetchData = async () => {
              }))
         }
     } catch (error) {
-        toast("Terjadi kesalahan koneksi", { type: "error" })
+        toast("Terjadi kesalahan koneksi saat memuat data", { type: "error" })
     } finally {
         isLoading.value = false
     }
@@ -111,7 +111,7 @@ const handlePilihBarang = () => {
 }
 
 // ==========================================
-// 2. SUBMIT PEMINJAMAN BARU (POST)
+// 2. SUBMIT PEMINJAMAN BARU (MENUNGGU KONFIRMASI)
 // ==========================================
 const submitPeminjaman = async () => {
     if (!formPinjam.value.peminjam || !formPinjam.value.nama_barang) {
@@ -134,7 +134,12 @@ const submitPeminjaman = async () => {
             peminjam: formPinjam.value.peminjam,
             kuantitas: formPinjam.value.kuantitas,
             tanggal_pinjam: tgl,
-            keterangan: formPinjam.value.keterangan
+            keterangan: formPinjam.value.keterangan,
+            
+            // Pengamanan Ganda untuk Backend
+            status: "Menunggu Konfirmasi",
+            status_peminjaman: "Menunggu Konfirmasi",
+            status_pengembalian: "Belum Kembali"
         }
 
         const res = await fetch(GOOGLE_SCRIPT_URL, {
@@ -143,7 +148,7 @@ const submitPeminjaman = async () => {
         const result = await res.json()
 
         if (result.status === 200) {
-            toast("Peminjaman berhasil dicatat!", { type: "success" })
+            toast("Request peminjaman berhasil dibuat!", { type: "success" })
             formPinjam.value = {
                 nama_barang: '', selected_barang: null, ket_merk_ukuran: '',
                 peminjam: '', kuantitas: 1, tanggal_pinjam: getTodayDate(), keterangan: ''
@@ -154,41 +159,68 @@ const submitPeminjaman = async () => {
             toast(result.message || "Gagal menyimpan", { type: "error" })
         }
     } catch (error) {
-        toast("Kesalahan jaringan", { type: "error" })
+        toast("Kesalahan jaringan saat mengirim form", { type: "error" })
     } finally {
         isSubmitting.value = false
     }
 }
 
 // ==========================================
-// 3. KONFIRMASI PENGEMBALIAN (POST)
+// 3. SETUJUI PINJAMAN (Menunggu Konfirmasi -> Dipinjam)
 // ==========================================
-const openReturnModal = (item: any) => {
-    returnForm.value = {
-        no_urut: item.no_urut,
-        nama_barang: item.nama_barang,
-        peminjam: item.peminjam,
-        tanggal_pengembalian: getTodayDate(),
-        keterangan: item.keterangan || '',
-        status_peminjaman: 'Selesai',
-        status_pengembalian: 'Sudah Kembali'
+const approvePeminjaman = async (item: any) => {
+    if (!confirm(`Setujui peminjaman ${item.nama_barang} untuk ${item.peminjam}?`)) return
+
+    try {
+        const payload = {
+            action: "edit_peminjaman",
+            no_urut: item.no_urut,
+            nama_barang: item.nama_barang,
+            ket_merk_ukuran: item.ket_merk_ukuran,
+            peminjam: item.peminjam,
+            kuantitas: item.kuantitas,
+            tanggal_pinjam: item.tanggal_pinjam,
+            tanggal_pengembalian: item.tanggal_pengembalian,
+            
+            // Ubah Status ke Dipinjam
+            status_peminjaman: 'Dipinjam',
+            status_pengembalian: item.status_pengembalian || 'Belum Kembali',
+            keterangan: item.keterangan
+        }
+
+        const res = await fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload)
+        })
+        const result = await res.json()
+
+        if (result.status === 200) {
+            toast("Peminjaman disetujui!", { type: "success" })
+            fetchData()
+        } else {
+            toast(result.message || "Gagal menyetujui", { type: "error" })
+        }
+    } catch (error) {
+        toast("Kesalahan jaringan", { type: "error" })
     }
-    showReturnModal.value = true
 }
 
-const submitPengembalian = async () => {
-    isSubmitting.value = true
+// ==========================================
+// 4. KONFIRMASI PENGEMBALIAN (Dipinjam -> Selesai)
+// ==========================================
+const markAsReturned = async (item: any) => {
+    if (!confirm(`Konfirmasi pengembalian barang dari ${item.peminjam} hari ini?`)) return
+
     try {
-        let tgl = returnForm.value.tanggal_pengembalian
-        if (tgl && tgl.includes('-')) tgl = `${tgl.split('-')[2]}/${tgl.split('-')[1]}/${tgl.split('-')[0]}`
+        const todayStr = getTodayDate();
+        let tgl = `${todayStr.split('-')[2]}/${todayStr.split('-')[1]}/${todayStr.split('-')[0]}`
 
         const payload = {
             action: "konfirmasi_pengembalian",
-            no_urut: returnForm.value.no_urut,
+            no_urut: item.no_urut,
             tanggal_pengembalian: tgl,
-            keterangan: returnForm.value.keterangan,
-            status_peminjaman: returnForm.value.status_peminjaman,
-            status_pengembalian: returnForm.value.status_pengembalian
+            keterangan: item.keterangan || '',
+            status_peminjaman: 'Selesai',
+            status_pengembalian: 'Sudah Kembali'
         }
 
         const res = await fetch(GOOGLE_SCRIPT_URL, {
@@ -198,50 +230,50 @@ const submitPengembalian = async () => {
 
         if (result.status === 200) {
             toast("Pengembalian berhasil dikonfirmasi!", { type: "success" })
-            showReturnModal.value = false
             fetchData()
         } else {
             toast(result.message || "Gagal konfirmasi", { type: "error" })
         }
     } catch (error) {
         toast("Kesalahan jaringan", { type: "error" })
-    } finally {
-        isSubmitting.value = false
     }
 }
 
 // ==========================================
-// 4. EDIT DATA PEMINJAMAN (POST)
+// 5. INLINE EDIT DATA (POST)
 // ==========================================
-const openEditModal = (item: any) => {
+const startInlineEdit = (item: any) => {
+    editingItem.value = item._tempId
+    
+    // Fallback status aman
+    const sPinjam = String(item.status_peminjaman || '').trim();
+    const sKembali = String(item.status_pengembalian || '').trim();
+    
     editForm.value = {
         no_urut: item.no_urut,
-        nama_barang: item.nama_barang,
-        ket_merk_ukuran: item.ket_merk_ukuran || '',
-        peminjam: item.peminjam,
-        kuantitas: item.kuantitas,
-        tanggal_pinjam: formatDateForInput(item.tanggal_pinjam),
-        status_peminjaman: item.status_peminjaman || 'Dipinjam',
-        status_pengembalian: item.status_pengembalian || 'Belum Kembali',
+        status_peminjaman: (sPinjam === '-' || !sPinjam) ? 'Menunggu Konfirmasi' : sPinjam,
+        status_pengembalian: (sKembali === '-' || !sKembali) ? 'Belum Kembali' : sKembali,
         keterangan: item.keterangan || ''
     }
-    showEditModal.value = true
 }
 
-const submitEditPeminjaman = async () => {
-    isSubmitting.value = true
-    try {
-        let tglPinjam = editForm.value.tanggal_pinjam
-        if (tglPinjam && tglPinjam.includes('-')) tglPinjam = `${tglPinjam.split('-')[2]}/${tglPinjam.split('-')[1]}/${tglPinjam.split('-')[0]}`
+const cancelInlineEdit = () => {
+    editingItem.value = null
+    editForm.value = { no_urut:'', status_peminjaman: '', status_pengembalian: '', keterangan: '' }
+}
 
+const saveInlineEdit = async (item: any) => {
+    isSavingEdit.value = true
+    try {
         const payload = {
             action: "edit_peminjaman",
             no_urut: editForm.value.no_urut,
-            nama_barang: editForm.value.nama_barang,
-            ket_merk_ukuran: editForm.value.ket_merk_ukuran,
-            peminjam: editForm.value.peminjam,
-            kuantitas: editForm.value.kuantitas,
-            tanggal_pinjam: tglPinjam,
+            nama_barang: item.nama_barang,
+            ket_merk_ukuran: item.ket_merk_ukuran,
+            peminjam: item.peminjam,
+            kuantitas: item.kuantitas,
+            tanggal_pinjam: item.tanggal_pinjam,
+            tanggal_pengembalian: item.tanggal_pengembalian,
             status_peminjaman: editForm.value.status_peminjaman,
             status_pengembalian: editForm.value.status_pengembalian,
             keterangan: editForm.value.keterangan
@@ -254,29 +286,26 @@ const submitEditPeminjaman = async () => {
 
         if (result.status === 200) {
             toast("Data berhasil diperbarui!", { type: "success" })
-            showEditModal.value = false
+            cancelInlineEdit()
             fetchData()
         } else {
             toast(result.message || "Gagal memperbarui data", { type: "error" })
         }
     } catch (error) {
-        toast("Kesalahan jaringan", { type: "error" })
+        toast("Terjadi kesalahan koneksi", { type: "error" })
     } finally {
-        isSubmitting.value = false
+        isSavingEdit.value = false
     }
 }
 
 // ==========================================
-// 5. HAPUS DATA PEMINJAMAN (POST)
+// 6. HAPUS DATA PEMINJAMAN (POST)
 // ==========================================
 const deleteData = async (item: any) => {
-    if (!confirm(`Hapus data peminjaman atas nama ${item.peminjam} untuk barang ${item.nama_barang}?`)) return
+    if (!confirm(`Hapus riwayat peminjaman atas nama ${item.peminjam} secara permanen?`)) return
 
     try {
-        const payload = {
-            action: "delete_peminjaman",
-            no_urut: item.no_urut
-        }
+        const payload = { action: "delete_peminjaman", no_urut: item.no_urut }
 
         const res = await fetch(GOOGLE_SCRIPT_URL, {
             method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload)
@@ -290,10 +319,9 @@ const deleteData = async (item: any) => {
             toast(result.message || "Gagal menghapus data", { type: "error" })
         }
     } catch (error) {
-        toast("Terjadi kesalahan koneksi", { type: "error" })
+        toast("Kesalahan koneksi", { type: "error" })
     }
 }
-
 
 const uniqueBarangList = computed(() => {
     const names = dataMasterKode.value.map(item => String(item.nama_barang).toUpperCase().trim())
@@ -301,7 +329,6 @@ const uniqueBarangList = computed(() => {
 })
 
 const sortedPeminjaman = computed(() => {
-    // Urutkan dari yang terbaru dipinjam
     return [...dataPeminjaman.value].reverse()
 })
 
@@ -311,6 +338,13 @@ const paginatedPeminjaman = computed(() => {
     const end = start + itemsPerPage.value
     return sortedPeminjaman.value.slice(start, end)
 })
+
+// Fungsi helper status di template
+const normalizeStatus = (statusStr: string) => {
+    const s = String(statusStr || '').trim().toLowerCase();
+    if (s === '-' || s === '') return 'menunggu konfirmasi';
+    return s;
+}
 
 onMounted(() => { fetchData() })
 </script>
@@ -345,47 +379,125 @@ onMounted(() => { fetchData() })
                         <table class="data-table wide-table">
                             <thead>
                                 <tr>
-                                    <th style="width: 50px;">No</th>
+                                    <th style="width: 50px; text-align: center;">No</th>
                                     <th>Peminjam</th>
                                     <th>Nama Barang</th>
                                     <th>Ket/Merk</th>
                                     <th style="text-align: center;">Qty</th>
                                     <th>Tgl Pinjam</th>
                                     <th>Tgl Kembali</th>
-                                    <th style="text-align: center;">Status</th>
+                                    <th style="text-align: center;">Status Pinjam</th>
+                                    <th style="text-align: center;">Status Kembali</th>
+                                    <th>Catatan</th>
                                     <th style="text-align: center;">Aksi</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <tr v-if="sortedPeminjaman.length === 0">
-                                    <td colspan="9" class="text-center">Belum ada riwayat peminjaman.</td>
+                                    <td colspan="11" class="text-center">Belum ada riwayat peminjaman.</td>
                                 </tr>
                                 
-                                <tr v-for="(item, index) in paginatedPeminjaman" :key="index">
-                                    <td>{{ item.no_urut }}</td>
-                                    <td><strong>{{ item.peminjam }}</strong></td>
-                                    <td>{{ item.nama_barang }} <br> <span class="kode-kecil" v-if="item.gol">{{ item.gol }} {{ item.kel }} {{ item.sub_kel }}</span></td>
-                                    <td>{{ item.ket_merk_ukuran || '-' }}</td>
-                                    <td style="text-align: center;">{{ item.kuantitas }}</td>
-                                    <td>{{ item.tanggal_pinjam }}</td>
-                                    <td>{{ item.tanggal_pengembalian || '-' }}</td>
-                                    <td style="text-align: center;">
-                                        <span class="status-badge" :class="String(item.status_peminjaman).toLowerCase() === 'selesai' ? 'success' : 'warning'">
-                                            {{ item.status_peminjaman || 'Dipinjam' }}
-                                        </span>
-                                    </td>
-                                    <td class="action-cell">
-                                        <button 
-                                            v-if="String(item.status_peminjaman).toLowerCase() !== 'selesai'"
-                                            @click="openReturnModal(item)" 
-                                            class="btn-action">
-                                            Konfirmasi
-                                        </button>
-                                        <span v-else class="text-muted" style="margin-right: 10px;">✓ Selesai</span>
+                                <tr v-for="(item, index) in paginatedPeminjaman" :key="item._tempId">
+                                    
+                                    <!-- JIKA BARIS SEDANG DI-EDIT (INLINE EDIT HANYA STATUS) -->
+                                    <template v-if="editingItem === item._tempId">
+                                        <td style="text-align: center; color: #94a3b8;">{{ item.no_urut }}</td>
                                         
-                                        <button @click="openEditModal(item)" class="btn-icon edit-btn" title="Edit Data">✎</button>
-                                        <button @click="deleteData(item)" class="btn-icon delete-btn" title="Hapus Data">🗑</button>
-                                    </td>
+                                        <!-- KOLOM READ-ONLY -->
+                                        <td><strong>{{ item.peminjam }}</strong></td>
+                                        <td class="sticky-col">{{ item.nama_barang }} <br> <span class="kode-kecil" v-if="item.gol">{{ item.gol }} {{ item.kel }} {{ item.sub_kel }}</span></td>
+                                        <td style="color: #475569;">{{ item.ket_merk_ukuran || '-' }}</td>
+                                        <td style="text-align: center;">{{ item.kuantitas }}</td>
+                                        <td>{{ formatSimpleDate(item.tanggal_pinjam) }}</td>
+                                        <td>{{ formatSimpleDate(item.tanggal_pengembalian) }}</td>
+                                        
+                                        <!-- KOLOM BISA DIEDIT -->
+                                        <td style="text-align: center;">
+                                            <select v-model="editForm.status_peminjaman" class="edit-input">
+                                                <option value="Menunggu Konfirmasi">Menunggu Konfirmasi</option>
+                                                <option value="Dipinjam">Dipinjam</option>
+                                                <option value="Selesai">Selesai</option>
+                                                <option value="Hilang/Rusak">Hilang/Rusak</option>
+                                            </select>
+                                        </td>
+                                        <td style="text-align: center;">
+                                            <select v-model="editForm.status_pengembalian" class="edit-input">
+                                                <option value="Belum Kembali">Belum Kembali</option>
+                                                <option value="Sudah Kembali">Sudah Kembali</option>
+                                                <option value="Terkendala">Terkendala</option>
+                                            </select>
+                                        </td>
+                                        <td>
+                                            <input type="text" v-model="editForm.keterangan" class="edit-input" placeholder="Tulis Catatan..." style="min-width: 140px;" />
+                                        </td>
+
+                                        <td class="action-cell">
+                                            <button @click="saveInlineEdit(item)" :disabled="isSavingEdit" class="btn-icon save-btn" title="Simpan Perubahan">✓</button>
+                                            <button @click="cancelInlineEdit" :disabled="isSavingEdit" class="btn-icon cancel-btn" title="Batal Edit">✕</button>
+                                        </td>
+                                    </template>
+
+                                    <!-- TAMPILAN BARIS NORMAL -->
+                                    <template v-else>
+                                        <td style="text-align: center; color: #64748b;">{{ item.no_urut }}</td>
+                                        <td><strong>{{ item.peminjam }}</strong></td>
+                                        <td class="sticky-col">{{ item.nama_barang }} <br> <span class="kode-kecil" v-if="item.gol">{{ item.gol }} {{ item.kel }} {{ item.sub_kel }}</span></td>
+                                        <td style="color: #475569;">{{ item.ket_merk_ukuran || '-' }}</td>
+                                        <td style="text-align: center;">{{ item.kuantitas }}</td>
+                                        
+                                        <td>{{ formatSimpleDate(item.tanggal_pinjam) }}</td>
+                                        <td>{{ formatSimpleDate(item.tanggal_pengembalian) }}</td>
+                                        
+                                        <!-- TAMPILAN STATUS TERPISAH -->
+                                        <td style="text-align: center;">
+                                            <span class="status-badge" :class="{
+                                                'success': normalizeStatus(item.status_peminjaman) === 'selesai',
+                                                'warning': normalizeStatus(item.status_peminjaman) === 'dipinjam',
+                                                'info': normalizeStatus(item.status_peminjaman) === 'menunggu konfirmasi',
+                                                'danger': normalizeStatus(item.status_peminjaman) === 'hilang/rusak'
+                                            }">
+                                                {{ (item.status_peminjaman && item.status_peminjaman !== '-') ? item.status_peminjaman : 'Menunggu Konfirmasi' }}
+                                            </span>
+                                        </td>
+                                        <td style="text-align: center;">
+                                            <span class="text-status-kembali">
+                                                {{ (item.status_pengembalian && item.status_pengembalian !== '-') ? item.status_pengembalian : 'Belum Kembali' }}
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span v-if="item.keterangan && item.keterangan !== '-'" class="text-catatan">"{{ item.keterangan }}"</span>
+                                            <span v-else class="text-catatan">-</span>
+                                        </td>
+                                        
+                                        <!-- TOMBOL AKSI OTOMATIS -->
+                                        <td class="action-cell">
+                                            
+                                            <!-- JIKA MENUNGGU KONFIRMASI (TOMBOL BIRU) -->
+                                            <button 
+                                                v-if="normalizeStatus(item.status_peminjaman) === 'menunggu konfirmasi'"
+                                                @click="approvePeminjaman(item)" 
+                                                class="btn-action approve-btn" title="Setujui Pinjaman">
+                                                Setujui
+                                            </button>
+
+                                            <!-- JIKA SEDANG DIPINJAM (TOMBOL KUNING) -->
+                                            <button 
+                                                v-else-if="normalizeStatus(item.status_peminjaman) === 'dipinjam'"
+                                                @click="markAsReturned(item)" 
+                                                class="btn-action return-btn" title="Konfirmasi Pengembalian">
+                                                Kembalikan
+                                            </button>
+                                            
+                                            <!-- JIKA SELESAI -->
+                                            <span v-else-if="normalizeStatus(item.status_peminjaman) === 'selesai'" class="text-muted" style="margin-right: 10px;">
+                                                ✓ Selesai
+                                            </span>
+                                            
+                                            <!-- Tombol Edit & Hapus -->
+                                            <button @click="startInlineEdit(item)" class="btn-icon edit-btn" title="Edit Status/Catatan">✎</button>
+                                            <button @click="deleteData(item)" class="btn-icon delete-btn" title="Hapus Riwayat">🗑</button>
+                                        </td>
+                                    </template>
                                 </tr>
                             </tbody>
                         </table>
@@ -440,125 +552,18 @@ onMounted(() => { fetchData() })
 
                             <div class="form-group">
                                 <label>Keterangan / Keperluan</label>
-                                <input type="text" v-model="formPinjam.keterangan" placeholder="Contoh: Dipinjam untuk lomba" class="input-box" />
+                                <input type="text" v-model="formPinjam.keterangan" placeholder="Contoh: Dipinjam untuk acara pramuka" class="input-box" />
                             </div>
                         </div>
                     </div>
                     
                     <div class="form-actions mt-4">
                         <button type="submit" class="btn-submit w-full" :disabled="isSubmitting">
-                            <span v-if="isSubmitting">Menyimpan Data...</span>
-                            <span v-else>Catat Peminjaman</span>
+                            <span v-if="isSubmitting">Merekam Data...</span>
+                            <span v-else>Request Peminjaman</span>
                         </button>
                     </div>
                 </form>
-            </div>
-
-            <!-- ============================================== -->
-            <!-- MODAL PENGEMBALIAN                             -->
-            <!-- ============================================== -->
-            <div v-if="showReturnModal" class="modal-overlay" @click.self="showReturnModal = false">
-                <div class="modal-content">
-                    <div class="form-header">
-                        <h3>Konfirmasi Pengembalian</h3>
-                        <button @click="showReturnModal = false" class="btn-close" title="Tutup">✕</button>
-                    </div>
-                    <form @submit.prevent="submitPengembalian" class="data-form">
-                        <p class="mb-3" style="line-height: 1.5; color: #475569;">Konfirmasi pengembalian barang <strong>{{ returnForm.nama_barang }}</strong> dari <strong>{{ returnForm.peminjam }}</strong>.</p>
-                        
-                        <div class="form-group mb-3">
-                            <label>Tanggal Pengembalian</label>
-                            <input type="date" v-model="returnForm.tanggal_pengembalian" required class="input-box" />
-                        </div>
-                        
-                        <div class="form-group-inline mb-3">
-                            <div class="form-group half">
-                                <label>Status Peminjaman</label>
-                                <select v-model="returnForm.status_peminjaman" class="input-box">
-                                    <option value="Selesai">Selesai</option>
-                                    <option value="Hilang/Rusak">Hilang/Rusak</option>
-                                </select>
-                            </div>
-                            <div class="form-group half">
-                                <label>Status Kembali</label>
-                                <select v-model="returnForm.status_pengembalian" class="input-box">
-                                    <option value="Sudah Kembali">Sudah Kembali</option>
-                                    <option value="Terkendala">Terkendala</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div class="form-group mb-4">
-                            <label>Catatan Kondisi / Keterangan</label>
-                            <input type="text" v-model="returnForm.keterangan" placeholder="Kondisi barang saat dikembalikan..." class="input-box" />
-                        </div>
-
-                        <button type="submit" class="btn-submit w-full" :disabled="isSubmitting">
-                            <span v-if="isSubmitting">Memproses...</span>
-                            <span v-else>Konfirmasi Pengembalian ✓</span>
-                        </button>
-                    </form>
-                </div>
-            </div>
-
-            <!-- ============================================== -->
-            <!-- MODAL EDIT DATA                                -->
-            <!-- ============================================== -->
-            <div v-if="showEditModal" class="modal-overlay" @click.self="showEditModal = false">
-                <div class="modal-content modal-large">
-                    <div class="form-header">
-                        <h3>Edit Data Peminjaman</h3>
-                        <button @click="showEditModal = false" class="btn-close" title="Tutup">✕</button>
-                    </div>
-                    <form @submit.prevent="submitEditPeminjaman" class="data-form form-scrollable">
-                        <div class="form-grid-2-cols mb-4">
-                            <div class="input-col">
-                                <div class="form-group">
-                                    <label>Nama Peminjam</label>
-                                    <input type="text" v-model="editForm.peminjam" required class="input-box" />
-                                </div>
-                                <div class="form-group">
-                                    <label>Nama Barang</label>
-                                    <input type="text" v-model="editForm.nama_barang" required class="input-box" />
-                                </div>
-                                <div class="form-group">
-                                    <label>Kuantitas</label>
-                                    <input type="number" v-model="editForm.kuantitas" required class="input-box" />
-                                </div>
-                                <div class="form-group">
-                                    <label>Tanggal Pinjam</label>
-                                    <input type="date" v-model="editForm.tanggal_pinjam" required class="input-box" />
-                                </div>
-                            </div>
-                            <div class="input-col">
-                                <div class="form-group">
-                                    <label>Status Peminjaman</label>
-                                    <select v-model="editForm.status_peminjaman" class="input-box">
-                                        <option value="Dipinjam">Dipinjam</option>
-                                        <option value="Selesai">Selesai</option>
-                                        <option value="Hilang/Rusak">Hilang/Rusak</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>Status Pengembalian</label>
-                                    <select v-model="editForm.status_pengembalian" class="input-box">
-                                        <option value="Belum Kembali">Belum Kembali</option>
-                                        <option value="Sudah Kembali">Sudah Kembali</option>
-                                        <option value="Terkendala">Terkendala</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>Keterangan</label>
-                                    <input type="text" v-model="editForm.keterangan" class="input-box" placeholder="Keterangan..." />
-                                </div>
-                            </div>
-                        </div>
-                        <button type="submit" class="btn-submit w-full" :disabled="isSubmitting">
-                            <span v-if="isSubmitting">Menyimpan Perubahan...</span>
-                            <span v-else>Simpan Perubahan</span>
-                        </button>
-                    </form>
-                </div>
             </div>
 
         </main>
@@ -586,26 +591,48 @@ onMounted(() => { fetchData() })
 .kode-kecil { font-size: 11px; color: #94a3b8; font-family: monospace; background: #f1f5f9; padding: 2px 6px; border-radius: 4px; }
 .text-center { text-align: center; }
 
-.status-badge { padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
-.status-badge.warning { background: #fef3c7; color: #d97706; }
-.status-badge.success { background: #dcfce7; color: #166534; }
-.text-muted { color: #94a3b8; font-style: italic; font-weight: 600;}
+/* BADGES UNTUK STATUS */
+.status-badge { padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: 700; text-transform: uppercase; white-space: nowrap;}
+.status-badge.info { background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd;} /* Biru: Menunggu Konfirmasi */
+.status-badge.warning { background: #fef3c7; color: #d97706; border: 1px solid #fde68a;} /* Kuning: Dipinjam */
+.status-badge.success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0;} /* Hijau: Selesai */
+.status-badge.danger { background: #fee2e2; color: #dc2626; border: 1px solid #fecaca;}  /* Merah: Rusak/Hilang */
 
+.text-status-kembali { font-size: 12px; font-weight: 600; color: #64748b; white-space: nowrap;}
+.text-catatan { font-size: 12px; color: #64748b; font-style: italic; }
+.text-muted { color: #94a3b8; font-style: italic; font-weight: 600; white-space: nowrap;}
+
+.sticky-col { position: sticky; left: 0; background-color: #fff; z-index: 5; box-shadow: 2px 0 5px rgba(0,0,0,0.05); font-weight: 600; }
+
+/* ACTION BUTTONS */
 .action-cell { display: flex; gap: 8px; justify-content: center; align-items: center; }
-.btn-action { background: #eff6ff; color: #3b82f6; border: 1px solid #bfdbfe; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: 0.2s;}
-.btn-action:hover { background: #3b82f6; color: white; }
+.btn-action { padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: 0.2s; border: 1px solid transparent; white-space: nowrap;}
+
+/* Tombol Setujui (Biru) */
+.approve-btn { background: #eff6ff; color: #3b82f6; border-color: #bfdbfe; }
+.approve-btn:hover { background: #3b82f6; color: white; }
+
+/* Tombol Kembalikan (Kuning/Oranye) */
+.return-btn { background: #fffbeb; color: #d97706; border-color: #fde68a; }
+.return-btn:hover { background: #d97706; color: white; }
+
 .btn-icon { background: none; border: none; font-size: 14px; cursor: pointer; padding: 6px 10px; border-radius: 6px; transition: 0.2s; display: flex; align-items: center; justify-content: center;}
 .edit-btn { color: #3b82f6; background-color: #eff6ff; }
 .edit-btn:hover { background-color: #3b82f6; color: white; }
 .delete-btn { color: #ef4444; background-color: #fef2f2; }
 .delete-btn:hover { background-color: #ef4444; color: white; }
+.save-btn { color: #10b981; background-color: #ecfdf5; border: 1px solid #a7f3d0; font-weight: bold; }
+.save-btn:hover { background-color: #10b981; color: white; }
+.cancel-btn { color: #64748b; background-color: #f1f5f9; border: 1px solid #e2e8f0; font-weight: bold;}
+.cancel-btn:hover { background-color: #64748b; color: white; }
+
+.edit-input { width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 12px; font-family: inherit; background-color: #f8fafc; outline: none; transition: 0.2s;}
+.edit-input:focus { border-color: #3b82f6; background-color: #eff6ff; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2); }
 
 .form-section { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); max-width: 800px;}
 .form-section h3 { margin: 0; color: #1e293b;}
 .form-grid-2-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; } 
 .form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 15px;}
-.form-group-inline { display: flex; gap: 15px; }
-.half { width: 50%; }
 .form-group label { font-size: 13px; font-weight: 600; color: #475569; }
 .input-box { width: 100%; padding: 10px 14px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; outline: none; transition: border-color 0.2s; background: #fff;}
 .input-box:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15); }
@@ -614,17 +641,6 @@ onMounted(() => { fetchData() })
 .btn-submit:hover:not(:disabled) { background-color: #2563eb; }
 .btn-submit:disabled { background-color: #94a3b8; }
 .w-full { width: 100%; }
-
-/* MODAL */
-.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.6); display: flex; justify-content: center; align-items: center; z-index: 1000; padding: 20px; backdrop-filter: blur(4px);}
-.modal-content { background: #ffffff; width: 100%; max-width: 450px; border-radius: 12px; padding: 24px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); animation: modalIn 0.3s ease-out; }
-.modal-large { max-width: 700px; }
-.form-scrollable { max-height: 80vh; overflow-y: auto; padding-right: 10px; }
-@keyframes modalIn { from { opacity: 0; transform: translateY(-30px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
-.form-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; }
-.form-header h3 { font-size: 18px; font-weight: 700; color: #1e293b; margin: 0; }
-.btn-close { background: none; border: none; font-size: 20px; color: #94a3b8; cursor: pointer; transition: color 0.2s; }
-.btn-close:hover { color: #ef4444; }
 
 .loading-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 40vh; color: #64748b; font-weight: 600;}
 .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 15px; }

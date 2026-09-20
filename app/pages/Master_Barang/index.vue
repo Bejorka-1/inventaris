@@ -4,7 +4,7 @@ import { toast } from 'vue3-toastify'
 import Navbar from '~/components/Navbar.vue'
 
 // --- SESUAIKAN URL API ANDA ---
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzjvzPhMA9WND064RIbRemeQ4zutDvCGs6oJtWrWjMqm4zyWhKr_yrRlEASBEjZLQ/exec"
+const GOOGLE_SCRIPT_URL = "http://127.0.0.1:8000/api/inventaris"
 
 const dataMasterKode = ref<any[]>([])
 const isLoading = ref(true)

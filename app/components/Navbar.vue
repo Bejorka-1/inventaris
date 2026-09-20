@@ -27,7 +27,7 @@ onMounted(() => {
     <aside class="sidebar-light">
         <!-- BRANDING / LOGO -->
         <div class="brand-section">
-            <h2 class="app-title">Peminjaman Barang</h2>
+            <h2 class="app-title">Buku Induk Barang</h2>
         </div>
 
         <!-- NAVIGATION MENU -->
@@ -62,10 +62,10 @@ onMounted(() => {
                         Daftar Inventaris
                     </NuxtLink>
 
-                    <NuxtLink to="/total_aset" class="sub-link" active-class="active-sub-link">
+                    <!-- <NuxtLink to="/total_aset" class="sub-link" active-class="active-sub-link">
                         <span class="sub-dot"></span>
                         Total Aset
-                    </NuxtLink>
+                    </NuxtLink> -->
 
                     <NuxtLink to="/rekapitulasi" class="sub-link" active-class="active-sub-link">
                         <span class="sub-dot"></span>

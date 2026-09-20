@@ -4,7 +4,7 @@ import { toast } from 'vue3-toastify'
 import Navbar from '~/components/Navbar.vue'
 
 // --- PASTIKAN URL INI SAMA DENGAN URL DEPLOY TERBARU ANDA ---
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzjvzPhMA9WND064RIbRemeQ4zutDvCGs6oJtWrWjMqm4zyWhKr_yrRlEASBEjZLQ/exec"
+const GOOGLE_SCRIPT_URL = "http://127.0.0.1:8000/api/inventaris"
 
 const isLoading = ref(true)
 
@@ -13,17 +13,23 @@ const dataSMA = ref<any[]>([])
 const dataSMK = ref<any[]>([])
 const dataYAYASAN = ref<any[]>([])
 
-// Fungsi untuk konversi string harga ke angka murni (mengabaikan "Rp", titik, dsb)
-const parsePrice = (priceStr: any) => {
-    if (!priceStr) return 0
-    const cleanStr = String(priceStr).replace(/[^0-9]/g, '')
-    return parseInt(cleanStr, 10) || 0
-}
-
-const parseQty = (qtyStr: any) => {
-    if (!qtyStr) return 0
-    const cleanStr = String(qtyStr).replace(/[^0-9]/g, '')
-    return parseInt(cleanStr, 10) || 1 
+// ================================================================
+// PERBAIKAN LOGIKA 1: PARSING HARGA (KEBAL DESIMAL & STRICT TYPESCRIPT)
+// ================================================================
+const parsePrice = (priceStr: any): number => {
+    if (!priceStr) return 0;
+    let str: string = String(priceStr).trim();
+    
+    // Potong angka di belakang koma (tambahkan || '' untuk mengatasi error TS undefined)
+    if (str.includes(',')) {
+        str = str.split(',')[0] || '';
+    } else if (str.includes('.00')) {
+        str = str.split('.00')[0] || '';
+    }
+    
+    // Hilangkan semua karakter kecuali angka murni
+    const cleanStr = str.replace(/[^0-9]/g, '');
+    return parseInt(cleanStr, 10) || 0;
 }
 
 const formatRupiah = (angka: number) => {
@@ -60,43 +66,52 @@ onMounted(() => {
     fetchAllData()
 })
 
-// FUNGSI KALKULATOR UTAMA PER LEMBAGA
+// ================================================================
+// PERBAIKAN LOGIKA 2: FUNGSI KALKULATOR UTAMA PER LEMBAGA
+// ================================================================
 const calculateStats = (dataArray: any[]) => {
     let totalAsetGross = 0
     let totalLelangMusnah = 0
     let totalHibah = 0
+    let totalMutasi = 0 // Tambahan Mutasi
 
     dataArray.forEach(item => {
         const namaBarang = String(item.namaBarang || item.nama_barang || '').trim().toUpperCase()
         const noUrut = String(item.noUrutBarang || item.no_urut_barang || item.jb_k || '').trim()
         
-        // Filter agar header kelompok tidak ikut dihitung
+        // Memastikan baris tersebut adalah barang asli, BUKAN Sub-Judul (0000)
         const isNotHeader = noUrut !== '' && noUrut !== '-' && noUrut !== '0000' && noUrut !== '000' && noUrut !== '0'
-        const isValidName = !namaBarang.includes('BUKU INDUK') && !namaBarang.includes('JAKARTA') && namaBarang !== 'TANAH' && namaBarang !== 'BANGUNAN' && namaBarang !== ''
+        
+        // Memastikan bukan Header Tabel Atas
+        const isValidName = !namaBarang.includes('BUKU INDUK') && !namaBarang.includes('JAKARTA') && namaBarang !== ''
 
         if (isNotHeader && isValidName) {
-            const hrg = parsePrice(item.harga || item.Harga)
-            const qty = parseQty(item.kuantitas || item.Kuantitas)
-            const nilaiItem = hrg * qty
+            
+            // Jangan kalikan dengan Qty. Di Buku Induk, kolom harga adalah nilai mutlak perolehan baris tersebut.
+            const nilaiItem = parsePrice(item.harga || item.Harga)
 
+            // Akumulasi ke Total Aset (Kotor/Gross)
             totalAsetGross += nilaiItem
 
-            // Cek status pemotongan aset
+            // Cek klasifikasi status aset untuk pemotongan
             const status = String(item.status || item.Status || '').toLowerCase().trim()
             if (status.includes('lelang') || status.includes('musnah')) {
                 totalLelangMusnah += nilaiItem
             } else if (status.includes('hibah')) {
                 totalHibah += nilaiItem
+            } else if (status.includes('mutasi')) {
+                totalMutasi += nilaiItem
             }
         }
     })
 
-    // Jumlah Total = (Total Aset Keseluruhan) dikurangi (Lelang/Musnah + Hibah)
-    const jumlahTotalNet = totalAsetGross - totalLelangMusnah - totalHibah
+    // Jumlah Total (Netto) = Total Aset - (Lelang/Musnah + Hibah + Mutasi)
+    const jumlahTotalNet = totalAsetGross - totalLelangMusnah - totalHibah - totalMutasi
 
     return {
         lelangMusnah: totalLelangMusnah,
         hibah: totalHibah,
+        mutasi: totalMutasi,
         totalAset: totalAsetGross,
         jumlahTotal: jumlahTotalNet
     }
@@ -145,6 +160,11 @@ const grandTotalAset = computed(() => statsSMA.value.totalAset + statsSMK.value.
                                     <td>Dihibahkan</td>
                                     <td class="text-right">{{ formatRupiah(statsSMA.hibah) }}</td>
                                 </tr>
+                                <!-- Penambahan Row Dimutasi di Tampilan -->
+                                <tr>
+                                    <td>Dimutasi</td>
+                                    <td class="text-right">{{ formatRupiah(statsSMA.mutasi) }}</td>
+                                </tr>
                                 <tr class="row-total-aset bg-cyan">
                                     <td>Total Aset</td>
                                     <td class="text-right"><strong>{{ formatRupiah(statsSMA.totalAset) }}</strong></td>
@@ -169,6 +189,10 @@ const grandTotalAset = computed(() => statsSMA.value.totalAset + statsSMK.value.
                                 <tr>
                                     <td>Dihibahkan</td>
                                     <td class="text-right">{{ formatRupiah(statsSMK.hibah) }}</td>
+                                </tr>
+                                <tr>
+                                    <td>Dimutasi</td>
+                                    <td class="text-right">{{ formatRupiah(statsSMK.mutasi) }}</td>
                                 </tr>
                                 <tr class="row-total-aset bg-cyan">
                                     <td>Total Aset</td>
@@ -195,6 +219,10 @@ const grandTotalAset = computed(() => statsSMA.value.totalAset + statsSMK.value.
                                     <td>Dihibahkan</td>
                                     <td class="text-right">{{ formatRupiah(statsYAYASAN.hibah) }}</td>
                                 </tr>
+                                <tr>
+                                    <td>Dimutasi</td>
+                                    <td class="text-right">{{ formatRupiah(statsYAYASAN.mutasi) }}</td>
+                                </tr>
                                 <tr class="row-total-aset bg-cyan">
                                     <td>Total Aset</td>
                                     <td class="text-right"><strong>{{ formatRupiah(statsYAYASAN.totalAset) }}</strong></td>
@@ -209,12 +237,12 @@ const grandTotalAset = computed(() => statsSMA.value.totalAset + statsSMK.value.
 
                 </div>
 
-                <!-- GRAND TOTAL SECTION (MENGIKUTI DESAIN SPREADSHEET) -->
+                <!-- GRAND TOTAL SECTION -->
                 <div class="grand-total-section">
                     
                     <div class="grand-total-box">
                         <div class="gt-header bg-yellow">
-                            <h3>TOTAL ASET REAL TIME</h3>
+                            <h3>TOTAL ASET REAL TIME (NETTO)</h3>
                         </div>
                         <div class="gt-body">
                             <h1>{{ formatRupiah(grandTotalRealTime) }}</h1>
@@ -223,7 +251,7 @@ const grandTotalAset = computed(() => statsSMA.value.totalAset + statsSMK.value.
 
                     <div class="grand-total-box mt-4">
                         <div class="gt-header bg-cyan">
-                            <h3>TOTAL ASET</h3>
+                            <h3>TOTAL ASET AWAL (BRUTO)</h3>
                         </div>
                         <div class="gt-body">
                             <h1>{{ formatRupiah(grandTotalAset) }}</h1>
