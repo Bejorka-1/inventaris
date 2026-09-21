@@ -66,11 +66,13 @@ const generatePDF = () => {
     const toastId = toast.loading("Menyiapkan dokumen PDF (Landscape)...")
 
     const opt = {
-        margin:       10, // Margin (mm)
+        margin:       [10, 10, 15, 10] as [number, number, number, number], // Margin [atas, kanan, bawah, kiri] (mm)
         filename:     `Laporan_Lengkap_Inventaris_${selectedLembaga.value}.pdf`,
         image:        { type: 'jpeg' as const, quality: 0.98 },
         html2canvas:  { scale: 2, useCORS: true, letterRendering: true }, 
-        jsPDF:        { unit: 'mm' as const, format: 'a4' as const, orientation: 'landscape' as const } // Diubah ke landscape
+        jsPDF:        { unit: 'mm' as const, format: 'a4' as const, orientation: 'landscape' as const }, // Diubah ke landscape
+        // Konfigurasi pagebreak agar baris (tr) tidak terpotong
+        pagebreak:    { mode: ['css', 'legacy'], avoid: ['tr', '.stat-card', '.section-title-badge'] }
     };
 
     html2pdf().set(opt).from(reportRef.value).save()
@@ -233,7 +235,7 @@ const grandTotalKeluar = computed(() => calcGrandTotal(rekapDataKeluar.value))
             </div>
 
             <!-- CONTAINER UTAMA YANG AKAN DI-RENDER MENJADI PDF -->
-            <div v-else ref="reportRef" class="pdf-container">
+            <div v-else ref="reportRef" class="pdf-container" style="background-color: white; padding: 20px;">
                 
                 <!-- HEADER LAPORAN PDF -->
                 <div class="pdf-header" style="text-align: center; margin-bottom: 25px;">
@@ -316,8 +318,11 @@ const grandTotalKeluar = computed(() => calcGrandTotal(rekapDataKeluar.value))
                     </div>
                 </div>
 
+                <!-- MEMAKSA PINDAH HALAMAN SAAT DI PRINT KE PDF UNTUK BAGIAN BERIKUTNYA -->
+                <div class="html2pdf__page-break"></div>
+
                 <!-- ================= SECTION 2: ASET KELUAR ================= -->
-                <div class="report-section-block">
+                <div class="report-section-block" style="padding-top: 10px;">
                     <div class="section-title-badge text-red" style="margin-bottom: 12px; font-weight: 700; font-size: 15px;">
                         B. LAPORAN ASET KELUAR
                     </div>
@@ -447,7 +452,10 @@ const grandTotalKeluar = computed(() => calcGrandTotal(rekapDataKeluar.value))
 
 .table-section { background-color: #ffffff; border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
 .table-wrapper { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 8px; }
-.data-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
+
+/* Menghindari potongan row tabel saat export pdf */
+.data-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; page-break-inside: auto; }
+.data-table tr { page-break-inside: avoid; page-break-after: auto; }
 .data-table th, .data-table td { padding: 10px 14px; border-bottom: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0;}
 .data-table th { background-color: #f8fafc; color: #475569; font-weight: 700; vertical-align: middle; }
 .data-table td { color: #334155; vertical-align: middle; }
@@ -457,7 +465,7 @@ const grandTotalKeluar = computed(() => calcGrandTotal(rekapDataKeluar.value))
 .th-sub { font-size: 10px !important; background-color: #f1f5f9 !important; color: #64748b !important; }
 .highlight-col { background-color: #f8fafc; border-left: 2px solid #e2e8f0 !important; border-right: 2px solid #e2e8f0 !important; }
 
-.footer-row { background-color: #1e293b; color: white !important; }
+.footer-row { background-color: #1e293b; color: white !important; page-break-inside: avoid; }
 .footer-row td { color: white !important; border-color: #334155; font-size: 13px; padding: 12px 14px; }
 .footer-row .highlight-col { background-color: #0f172a; border-color: #334155 !important; }
 

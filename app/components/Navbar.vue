@@ -5,8 +5,9 @@ import { useRoute } from 'vue-router'
 const route = useRoute()
 const tipeLembaga = ref('SMK')
 
-// State untuk mengontrol buka/tutup accordion menu Buku Induk
+// State untuk mengontrol buka/tutup accordion menu
 const isBukuIndukOpen = ref(false)
+const isPeminjamanOpen = ref(false)
 
 onMounted(() => {
     // Ambil data tipe lembaga dari cookie jika diperlukan untuk logika lain
@@ -16,9 +17,15 @@ onMounted(() => {
     }
 
     // Buka menu Buku Induk otomatis jika URL saat ini cocok dengan salah satu sub-menunya
-    const bukuIndukRoutes = ['/', '/mutasi', '/dihibahkan', '/lelang_musnahkan']
+    const bukuIndukRoutes = ['/', '/mutasi', '/dihibahkan', '/lelang_musnahkan', '/rekapitulasi', '/Master_Barang']
     if (bukuIndukRoutes.includes(route.path)) {
         isBukuIndukOpen.value = true
+    }
+
+    // Buka menu Peminjaman otomatis jika URL saat ini cocok dengan salah satu sub-menunya
+    const peminjamanRoutes = ['/peminjaman_barang', '/peminjaman_ruangan']
+    if (peminjamanRoutes.includes(route.path)) {
+        isPeminjamanOpen.value = true
     }
 })
 </script>
@@ -56,16 +63,10 @@ onMounted(() => {
 
                 <!-- Daftar Sub-Menu -->
                 <div v-show="isBukuIndukOpen" class="sub-menu">
-                    <!-- 1. Daftar Inventaris (Menu Utama /) -->
                     <NuxtLink to="/" class="sub-link" exact-active-class="active-sub-link">
                         <span class="sub-dot"></span>
                         Daftar Inventaris
                     </NuxtLink>
-
-                    <!-- <NuxtLink to="/total_aset" class="sub-link" active-class="active-sub-link">
-                        <span class="sub-dot"></span>
-                        Total Aset
-                    </NuxtLink> -->
 
                     <NuxtLink to="/rekapitulasi" class="sub-link" active-class="active-sub-link">
                         <span class="sub-dot"></span>
@@ -76,33 +77,46 @@ onMounted(() => {
                         <span class="sub-dot"></span>
                         Kode Barang
                     </NuxtLink>
-
-                    <!-- <NuxtLink to="/update_data_barang" class="sub-link" active-class="active-sub-link">
-                        <span class="sub-dot"></span>
-                        Update Data Barang
-                    </NuxtLink> -->
-
-                    <!-- 4. Barang Keluar / Lelang
-                    <NuxtLink to="/lelang_musnahkan" class="sub-link" active-class="active-sub-link">
-                        <span class="sub-dot"></span>
-                        Lelang/Musnahkan
-                    </NuxtLink> -->
                 </div>
             </div>
 
-            <!-- MENU BERDIRI SENDIRI: Peminjaman Barang -->
-            <NuxtLink to="/peminjaman_barang" class="nav-link" active-class="active-link">
-                <div class="nav-left">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nav-icon">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                        <polyline points="14 2 14 8 20 8"></polyline>
-                        <line x1="16" y1="13" x2="8" y2="13"></line>
-                        <line x1="16" y1="17" x2="8" y2="17"></line>
-                        <polyline points="10 9 9 9 8 9"></polyline>
+            <!-- GROUP: PEMINJAMAN (Memiliki Sub-Menu) -->
+            <div class="nav-group">
+                <!-- Tombol Induk -->
+                <button 
+                    class="nav-link parent-btn" 
+                    :class="{ 'active-parent': isPeminjamanOpen }" 
+                    @click="isPeminjamanOpen = !isPeminjamanOpen"
+                >
+                    <div class="nav-left">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nav-icon">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14 2 14 8 20 8"></polyline>
+                            <line x1="16" y1="13" x2="8" y2="13"></line>
+                            <line x1="16" y1="17" x2="8" y2="17"></line>
+                            <polyline points="10 9 9 9 8 9"></polyline>
+                        </svg>
+                        Peminjaman
+                    </div>
+                    <!-- Icon Panah (Chevron) -->
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="chevron-icon" :class="{ 'rotate': isPeminjamanOpen }">
+                        <polyline points="6 9 12 15 18 9"></polyline>
                     </svg>
-                    Peminjaman Barang
+                </button>
+
+                <!-- Daftar Sub-Menu -->
+                <div v-show="isPeminjamanOpen" class="sub-menu">
+                    <NuxtLink to="/peminjaman_barang" class="sub-link" active-class="active-sub-link">
+                        <span class="sub-dot"></span>
+                        Barang
+                    </NuxtLink>
+
+                    <NuxtLink to="/peminjaman_ruangan" class="sub-link" active-class="active-sub-link">
+                        <span class="sub-dot"></span>
+                        Ruangan
+                    </NuxtLink>
                 </div>
-            </NuxtLink>
+            </div>
 
         </nav>
     </aside>
